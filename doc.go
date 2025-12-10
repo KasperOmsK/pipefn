@@ -70,5 +70,11 @@ Example of a simple pipeline:
 			break // Stopping consumption halts the pipeline
 		}
 	}
+
+For more details on each type, function, and available transformation,
+please refer to the corresponding package-level documentation.
+Each function is documented with usage examples and notes on error propagation.
 */
 package pipefn
+
+// TODO: the doc should emphasize conventions on concurrency
