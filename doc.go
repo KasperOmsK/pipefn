@@ -15,11 +15,15 @@ All transformations inherit their input Pipe’s error channel,
 so errors automatically propagate through the pipeline and can be consumed
 alongside values when the pipeline is processed.
 
+Pipes are consumed using the Results, Values, ForEach, Collect and CollectValues
+methods. Consuming a Pipe is a destructive operation, once a Pipe has been consumed,
+it cannot be reused or iterated again.
+
 Example of a simple pipeline:
 
 	// Wrap iter.Seqs into Pipes
-	input1 := pipfn.From(IterateFile("events-2023.log"))
-	input2 := pipfn.From(IterateFile("events-2024.log"))
+	input1 := pipefn.From(IterateFile("events-2023.log"))
+	input2 := pipefn.From(IterateFile("events-2024.log"))
 
 	// Merge multiple pipes of the same type.
 	p := pipefn.Merge(input1, input2)
@@ -55,7 +59,7 @@ Example of a simple pipeline:
 	batches := pipefn.Chunk(validItems, 20)
 
 	// Convert Pipe back to iter.Seqs for consumption
-	vals, errs := pipefn.Results(batches)
+	vals, errs := batches.Results()
 
 	// Errors *must* be consumed concurrently to avoid blocking the pipeline.
 	go func() {
