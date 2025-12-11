@@ -1,6 +1,7 @@
 package pipefn
 
 import (
+	"fmt"
 	"iter"
 	"pipefn/internal/iterx"
 	"sync"
@@ -15,18 +16,30 @@ type (
 	//
 	// A Pipe is consumed when its sequence is iterated, typically through Results,
 	// Values, or ForEach. Once consumed, a Pipe cannot be reused.
-	// Refer to each consuming function's documentation for details on their behavior.
+	// Refer to each consuming method's documentation for details on their behavior.
 	Pipe[T any] struct {
 		seq    iter.Seq[T]
-		errors chan error
+		errors chan PipelineError
+	}
+
+	// PipelineError represents an error that occured inside a pipeline
+	PipelineError struct {
+		// The item that generated the error
+		Item any
+		// The actual error
+		Reason error
 	}
 )
+
+func (pe PipelineError) Error() string {
+	return fmt.Sprintf("%+v: %s", pe.Item, pe.Reason)
+}
 
 // From creates a new Pipe that produces values from the provided iter.Seq.
 func From[T any](seq iter.Seq[T]) Pipe[T] {
 
 	p := Pipe[T]{
-		errors: make(chan error, 256),
+		errors: make(chan PipelineError, 256),
 	}
 
 	p.seq = func(yield func(T) bool) {
@@ -71,7 +84,8 @@ func From[T any](seq iter.Seq[T]) Pipe[T] {
 //
 // Callers that wish to consume a pipe without having to handle errors should
 // use p.Values().
-func (p Pipe[T]) Results() (iter.Seq[T], iter.Seq[error]) {
+func (p Pipe[T]) Results() (iter.Seq[T], iter.Seq[PipelineError]) {
+	// NOTE: the errors should probably be directly returned as a chan.
 	return p.seq, iterx.FromChan(p.errors)
 }
 
@@ -103,7 +117,7 @@ func (p Pipe[T]) Values() (values iter.Seq[T]) {
 // Errors produced by the pipe are forwarded to errorFn.
 //
 // ForEach returns only after all values are consumed and all errors have been handled.
-func (p Pipe[T]) ForEach(consumeFn func(item T), errorFn func(err error)) {
+func (p Pipe[T]) ForEach(consumeFn func(item T), errorFn func(err PipelineError)) {
 	values, errors := p.Results()
 	var errorWg sync.WaitGroup
 	errorWg.Add(1)
@@ -126,15 +140,15 @@ func (p Pipe[T]) ForEach(consumeFn func(item T), errorFn func(err error)) {
 // Errors are collected in the order they are emitted.
 //
 // Collect fully drains the Pipe; after calling it, the Pipe cannot be consumed again.
-func (p Pipe[T]) Collect() ([]T, []error) {
+func (p Pipe[T]) Collect() ([]T, []PipelineError) {
 	var (
 		values []T
-		errors []error
+		errors []PipelineError
 	)
 
 	p.ForEach(func(item T) {
 		values = append(values, item)
-	}, func(err error) {
+	}, func(err PipelineError) {
 		errors = append(errors, err)
 	})
 
@@ -152,7 +166,7 @@ func (p Pipe[T]) CollectValues() []T {
 	var values []T
 	p.ForEach(func(item T) {
 		values = append(values, item)
-	}, func(err error) {})
+	}, func(err PipelineError) {})
 	return values
 }
 
