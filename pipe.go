@@ -116,7 +116,10 @@ func (p Pipe[T]) Values() (values iter.Seq[T]) {
 //
 // Errors produced by the pipe are forwarded to errorFn.
 //
-// ForEach returns only after all values are consumed and all errors have been handled.
+// consumeFn and errorFn are executed concurrently. If shared state is accessed,
+// the caller is responsible for ensuring proper synchronization.
+//
+// ForEach blocks until all values and errors have been processed.
 func (p Pipe[T]) ForEach(consumeFn func(item T), errorFn func(err PipelineError)) {
 	values, errors := p.Results()
 	var errorWg sync.WaitGroup
