@@ -141,13 +141,45 @@ func Chunk[T any](p Pipe[T], chunkSize int) Pipe[[]T] {
 	return Pipe[[]T]{
 		errors: p.errors,
 		seq: func(yield func([]T) bool) {
+
+			// NOTE: A previous version of Chunk reused the same backing slice between
+			// yields. This caused aliasing issues: if a chunk was kept by the caller and
+			// the buffer was reused for the next chunk, previously emitted data could
+			// appear to change.
+			//
+			// I initially documented this and required callers to copy the slice if
+			// they needed to retain it. In practice, this is not a good API:
+			//   1) Callers cannot reasonably know whether retaining the slice is safe
+			//      without understanding how the pipeline is built.
+			//   2) Some primitives (e.g. Collect) retain values by design.
+			//
+			// To guarantee correct behavior in all cases, each chunk must have its own
+			// backing slice.
+			//
+			// An alternative implementation would allocate a single backing slice
+			// and yield subslices of it for each chunk.
+			//
+			// This approach is more cache-friendly (since the allocated memory is contiguous)
+			// and reduces the number of allocations. However, it is less GC-friendly. Since
+			// Go’s GC cannot reclaim parts of a backing array independently, the entire
+			// buffer would remain alive as long as *any* subslice is still referenced.
+			//
+			// In other words, memory would only be freed once all references to all subslices
+			// are gone. If some chunks are retained while others are dropped, the whole
+			// backing array stays in memory.
+			//
+			// I have not yet decided whether this trade-off is preferable to the current
+			// (simpler) implementation. In practice, it is unlikely that only some chunks
+			// are retained, but if that does happen, it could lead to unexpectedly high
+			// memory retention.
+
 			accum := make([]T, 0, chunkSize)
 			for i := range p.seq {
 				if len(accum) >= chunkSize {
 					if !yield(accum) {
 						return
 					}
-					accum = accum[0:0]
+					accum = make([]T, 0, chunkSize)
 				}
 
 				accum = append(accum, i)
@@ -159,9 +191,6 @@ func Chunk[T any](p Pipe[T], chunkSize int) Pipe[[]T] {
 		},
 	}
 }
-
-//TODO:document the fact that the yielded slice musn't be captured and callers should copy
-// it if needed
 
 // GroupBy groups consecutive input values according to a key function and
 // returns a Pipe producing slices of those grouped values.
@@ -186,7 +215,7 @@ func GroupBy[T any, K comparable](p Pipe[T], keyFunc func(T) K) Pipe[[]T] {
 	return Pipe[[]T]{
 		errors: p.errors,
 		seq: func(yield func([]T) bool) {
-			var accum []T
+			accum := make([]T, 0)
 			var currentGroupKey K
 			for i := range p.seq {
 				k := keyFunc(i)
@@ -194,7 +223,7 @@ func GroupBy[T any, K comparable](p Pipe[T], keyFunc func(T) K) Pipe[[]T] {
 					if !yield(accum) {
 						return
 					}
-					accum = accum[0:0]
+					accum = make([]T, 0)
 				}
 				currentGroupKey = k
 				accum = append(accum, i)
