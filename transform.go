@@ -305,6 +305,11 @@ func GroupByAggregate[In any, K comparable, Out any](
 				updateFunc(acc, i)
 			}
 
+			// yield last aggregate
+			if acc != nil {
+				yield(*acc)
+			}
+
 		},
 	}
 }
