@@ -1,6 +1,7 @@
 package pipefn_test
 
 import (
+	"errors"
 	"fmt"
 	"iter"
 	"pipefn"
@@ -176,13 +177,40 @@ func TestMerge_ForwardsErrors(t *testing.T) {
 func TestFlatTryMap(t *testing.T) {
 	// tests that FlatTryMap behaves identically to Flatten(TryMap)
 
-	p1 := pipefn.From(seqOf("A,B,C", "D,E,F"))
-	v1 := pipefn.FlatTryMap(p1, func(in string) ([]string, error) {
+	tryMap := func(in string) ([]string, error) {
+
+		if strings.Contains(in, "G") {
+			return nil, errors.New("bad group")
+		}
+
 		return strings.Split(in, ","), nil
-	})
+	}
+
+	data := []string{"A,B,C", "D,E,F", "G,H,I"}
+	p1 := pipefn.From(seqOf(data...))
+	v1 := pipefn.FlatTryMap(p1, tryMap)
+
+	p2 := pipefn.From(seqOf(data...))
+	v2 := pipefn.Flatten(pipefn.TryMap(p2, tryMap))
+
+	values1, errs1 := collect(v1)
+	values2, errs2 := collect(v2)
+
+	require.Equal(t, values1, values2)
+	require.Equal(t, errs1, errs2)
+}
+
+func TestFlatMap(t *testing.T) {
+	// tests that FlatMap behaves identically to Flatten(Map)
+
+	groupFn := func(in string) []string {
+		return strings.Split(in, ",")
+	}
+	p1 := pipefn.From(seqOf("A,B,C", "D,E,F"))
+	v1 := pipefn.FlatMap(p1, groupFn)
 
 	p2 := pipefn.From(seqOf("A,B,C", "D,E,F"))
-	v2 := pipefn.Flatten(pipefn.TryMap(p2, func(in string) ([]string, error) { return strings.Split(in, ","), nil }))
+	v2 := pipefn.Flatten(pipefn.Map(p2, groupFn))
 
 	values1, errs1 := collect(v1)
 	values2, errs2 := collect(v2)
