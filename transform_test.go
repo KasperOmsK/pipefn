@@ -3,8 +3,8 @@ package pipefn_test
 import (
 	"errors"
 	"fmt"
+	"github.com/KasperOmsK/pipefn"
 	"iter"
-	"pipefn"
 	"strings"
 	"testing"
 

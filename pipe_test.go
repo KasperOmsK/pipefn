@@ -1,7 +1,7 @@
 package pipefn_test
 
 import (
-	"pipefn"
+	"github.com/KasperOmsK/pipefn"
 	"testing"
 
 	"github.com/stretchr/testify/require"

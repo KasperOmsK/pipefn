@@ -1,4 +1,4 @@
-module pipefn
+module github.com/KasperOmsK/pipefn
 
 go 1.23
 

@@ -1,8 +1,8 @@
 package pipefn
 
 import (
+	"github.com/KasperOmsK/pipefn/internal/iterx"
 	"iter"
-	"pipefn/internal/iterx"
 	"sync"
 )
 
