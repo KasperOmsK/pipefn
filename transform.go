@@ -237,9 +237,6 @@ func GroupBy[T any, K comparable](p Pipe[T], keyFunc func(T) K) Pipe[[]T] {
 	}
 }
 
-// TODO: GroupByAggregate is the equivalent of GroupBy + FoldLeft, not GroupBy + map !!
-// FoldLeft e.g. => val sum = ints.foldLeft(10) { (accumalor, currentElement) => accumulator + currentElement}
-
 // GroupByAggregate groups input values by key and aggregates them using user-supplied
 // initialization and update callbacks, producing one aggregated output value per group.
 //
