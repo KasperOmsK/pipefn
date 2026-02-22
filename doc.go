@@ -19,65 +19,8 @@ Pipes are consumed using the Results, Values, ForEach, Collect and CollectValues
 methods. Consuming a Pipe is a destructive operation, once a Pipe has been consumed,
 it cannot be reused or iterated again.
 
-Example of a simple pipeline:
-
-	// Wrap iter.Seqs into Pipes
-	input1 := pipefn.From(IterateFile("events-2023.log"))
-	input2 := pipefn.From(IterateFile("events-2024.log"))
-
-	// Merge multiple pipes of the same type.
-	p := pipefn.Merge(input1, input2)
-
-	// Map applies deterministic transformations that cannot fail.
-	// Transformations are simple functions, making it easy to reuse existing code.
-	trimmed := pipefn.Map(p, strconv.TrimSpace)
-
-	// TryMap applies transformations that may fail.
-	// Errors are forwarded to the Pipe's error channel.
-	events := pipefn.TryMap(trimmed, func(line string) (Event, error) {
-		return ParseEvent(line)
-	})
-
-	// All common FP-style transformation are available.
-
-	purchases := pipefn.Filter(events, func(e Event) bool {
-	    return e.Type == "purchase"
-	})
-
-	items := pipefn.FlatMap(purchases, func(e Event) []Item {
-	    return e.Items
-	})
-
-	// TryMap can act as a validation filter with error reporting
-	validItems := pipefn.TryMap(items, func(it Item) (Item, error) {
-	    if it.ID == "" {
-		return Item{}, fmt.Errorf("missing item ID")
-	    }
-	    return it, nil
-	})
-
-	batches := pipefn.Chunk(validItems, 20)
-
-	// Convert Pipe back to iter.Seqs for consumption
-	vals, errs := batches.Results()
-
-	// Errors *must* be consumed concurrently to avoid blocking the pipeline.
-	go func() {
-	    for err := range errs {
-		log.Println("pipeline error:", err)
-	    }
-	}()
-
-	for batch := range vals {
-		err := ProcessBatch(batch)
-		if err != nil{
-			break // Stopping consumption halts the pipeline
-		}
-	}
-
 For more details on each type, function, and available transformation,
 please refer to the corresponding package-level documentation.
-Each function is documented with usage examples and notes on error propagation.
 */
 package pipefn
 
