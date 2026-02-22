@@ -2,7 +2,6 @@ package pipefn
 
 import (
 	"fmt"
-	"github.com/KasperOmsK/pipefn/internal/iterx"
 	"iter"
 	"sync"
 )
@@ -19,11 +18,11 @@ type (
 	// Refer to each consuming method's documentation for details on their behavior.
 	Pipe[T any] struct {
 		seq    iter.Seq[T]
-		errors chan PipelineError
+		errors chan error
 	}
 
-	// PipelineError represents an error that occured inside a pipeline
-	PipelineError struct {
+	// PipeError represents an error that occured inside a pipeline
+	PipeError struct {
 		// The item that generated the error
 		Item any
 		// The actual error
@@ -31,7 +30,7 @@ type (
 	}
 )
 
-func (pe PipelineError) Error() string {
+func (pe *PipeError) Error() string {
 	return fmt.Sprintf("%+v: %s", pe.Item, pe.Reason)
 }
 
@@ -39,7 +38,7 @@ func (pe PipelineError) Error() string {
 func From[T any](seq iter.Seq[T]) Pipe[T] {
 
 	p := Pipe[T]{
-		errors: make(chan PipelineError, 256),
+		errors: make(chan error),
 	}
 
 	p.seq = func(yield func(T) bool) {
@@ -54,14 +53,19 @@ func From[T any](seq iter.Seq[T]) Pipe[T] {
 	return p
 }
 
-// Results returns two iterators: one that yields the values produced by p,
-// and one that yields the errors produced by p.
+// Results returns an iterator that yields the values produced by p,
+// and a channel that emits the errors produced by p.
 //
 // Iterating over the values iterator consumes p. Once iteration begins,
 // p cannot be reused, restarted, or iterated again.
 //
-// Callers must drain the errors iterator. If errors are not consumed,
+// Callers must drain the errors chan. If errors are not consumed,
 // the pipeline may block when a stage attempts to send an error.
+//
+// Callers that wish to consume a pipe without having to handle errors should
+// use p.Values() instead.
+//
+// All errors emited by results will be of type PipeError.
 //
 // Typical usage:
 //
@@ -72,7 +76,8 @@ func From[T any](seq iter.Seq[T]) Pipe[T] {
 //	go func() {
 //	    defer wg.Done()
 //	    for err := range errs {
-//	        log.Printf("pipeline error: %v", err)
+//		perr := (*PipeError)
+//	        log.Printf("pipeline error: item %v: %s", perr.Item, perr.Reason)
 //	    }
 //	}()
 //
@@ -81,12 +86,8 @@ func From[T any](seq iter.Seq[T]) Pipe[T] {
 //	}
 //	wg.Wait()
 //	// here, both values and errs have been fully drained.
-//
-// Callers that wish to consume a pipe without having to handle errors should
-// use p.Values().
-func (p Pipe[T]) Results() (iter.Seq[T], iter.Seq[PipelineError]) {
-	// NOTE: the errors should probably be directly returned as a chan.
-	return p.seq, iterx.FromChan(p.errors)
+func (p Pipe[T]) Results() (iter.Seq[T], <-chan error) {
+	return p.seq, p.errors
 }
 
 // Values returns the sequence of values produced by p.
@@ -120,7 +121,7 @@ func (p Pipe[T]) Values() (values iter.Seq[T]) {
 // the caller is responsible for ensuring proper synchronization.
 //
 // ForEach blocks until all values and errors have been processed.
-func (p Pipe[T]) ForEach(consumeFn func(item T), errorFn func(err PipelineError)) {
+func (p Pipe[T]) ForEach(consumeFn func(item T), errorFn func(err error)) {
 	values, errors := p.Results()
 	var errorWg sync.WaitGroup
 	errorWg.Add(1)
@@ -143,15 +144,15 @@ func (p Pipe[T]) ForEach(consumeFn func(item T), errorFn func(err PipelineError)
 // Errors are collected in the order they are emitted.
 //
 // Collect fully drains the Pipe; after calling it, the Pipe cannot be consumed again.
-func (p Pipe[T]) Collect() ([]T, []PipelineError) {
+func (p Pipe[T]) Collect() ([]T, []error) {
 	var (
 		values []T
-		errors []PipelineError
+		errors []error
 	)
 
 	p.ForEach(func(item T) {
 		values = append(values, item)
-	}, func(err PipelineError) {
+	}, func(err error) {
 		errors = append(errors, err)
 	})
 
@@ -169,7 +170,7 @@ func (p Pipe[T]) CollectValues() []T {
 	var values []T
 	p.ForEach(func(item T) {
 		values = append(values, item)
-	}, func(err PipelineError) {})
+	}, func(err error) {})
 	return values
 }
 

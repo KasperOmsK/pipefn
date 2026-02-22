@@ -77,7 +77,7 @@ func TestFilter_ForwardsErrors(t *testing.T) {
 
 	// Errors should include the ones for even numbers
 	require.Len(t, errs, 2)
-	errorMsgs := []string{errs[0].Reason.Error(), errs[1].Reason.Error()}
+	errorMsgs := []string{toPipelineError(errs[0]).Reason.Error(), toPipelineError(errs[1]).Reason.Error()}
 	require.Contains(t, errorMsgs, "even number: 2")
 	require.Contains(t, errorMsgs, "even number: 4")
 }
@@ -169,7 +169,7 @@ func TestMerge_ForwardsErrors(t *testing.T) {
 
 	// Errors from both pipes should be reported
 	require.Len(t, errs, 2)
-	errorMsgs := []string{errs[0].Reason.Error(), errs[1].Reason.Error()}
+	errorMsgs := []string{toPipelineError(errs[0]).Reason.Error(), toPipelineError(errs[1]).Reason.Error()}
 	require.Contains(t, errorMsgs, "pipe1 error")
 	require.Contains(t, errorMsgs, "pipe2 error")
 }
@@ -340,7 +340,11 @@ func TestGroupByAggregate_PreservesErrors(t *testing.T) {
 
 	// The error for Value=2 is preserved
 	require.Len(t, errs, 1)
-	require.EqualError(t, errs[0].Reason, "bad value 2")
+	require.EqualError(t, toPipelineError(errs[0]).Reason, "bad value 2")
+}
+
+func toPipelineError(err error) *pipefn.PipeError {
+	return err.(*pipefn.PipeError)
 }
 
 func seqOf[T any](values ...T) iter.Seq[T] {
@@ -352,11 +356,11 @@ func seqOf[T any](values ...T) iter.Seq[T] {
 		}
 	}
 }
-func collect[T any](p pipefn.Pipe[T]) ([]T, []pipefn.PipelineError) {
+func collect[T any](p pipefn.Pipe[T]) ([]T, []error) {
 	valsCh, errsCh := p.Results()
 
 	var vals []T
-	var errs []pipefn.PipelineError
+	var errs []error
 
 	done := make(chan struct{})
 

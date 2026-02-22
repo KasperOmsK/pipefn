@@ -33,3 +33,13 @@ func TestTap(t *testing.T) {
 
 	collect(pipe)
 }
+
+func TestTap_NoFunc(t *testing.T) {
+
+	pipe := pipefn.From(seqOf(1))
+
+	require.Panics(t, func() {
+		pipe.Tap(nil)
+	})
+
+}

@@ -61,7 +61,7 @@ func TryMap[In, Out any](p Pipe[In], fn TryMapFunc[In, Out]) Pipe[Out] {
 			for in := range p.seq {
 				result, err := fn(in)
 				if err != nil {
-					p.errors <- PipelineError{
+					p.errors <- &PipeError{
 						Item:   in,
 						Reason: err,
 					}
@@ -328,7 +328,7 @@ func Merge[T any](pipes ...Pipe[T]) Pipe[T] {
 		return pipes[0]
 	}
 
-	allErrors := make([]chan PipelineError, 0, len(pipes))
+	allErrors := make([]chan error, 0, len(pipes))
 	allValues := make([]iter.Seq[T], 0, len(pipes))
 
 	for _, p := range pipes {
