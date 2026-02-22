@@ -65,7 +65,7 @@ func From[T any](seq iter.Seq[T]) Pipe[T] {
 // Callers that wish to consume a pipe without having to handle errors should
 // use p.Values() instead.
 //
-// All errors emited by results will be of type PipeError.
+// All errors emited by Results will be of type *PipeError.
 //
 // Typical usage:
 //
