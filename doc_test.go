@@ -18,7 +18,7 @@ type Event struct {
 	Items []Item
 }
 
-// Example demonstrates a relatively complex pipeline that parses and prints
+// Example demonstrates a relatively complex pipeline that parses items from (fake) event files
 func Example() {
 	// Wrap iter.Seqs into Pipes
 	input1 := pipefn.From(IterateFile("events-2023.log"))
