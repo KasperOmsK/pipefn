@@ -5,6 +5,7 @@ on top of iter.Seq.
 
 # status
 
-This is still a WIP
+This project is still a work in progress. Expect bugs and possible API changes as it evolves. 
 
+Use in production at your own risk.
 
