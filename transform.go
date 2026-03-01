@@ -55,13 +55,57 @@ func FlatMap[In, Out any](p Pipe[In], fn MapFunc[In, []Out]) Pipe[Out] {
 //
 // Errors from the input Pipe are preserved.
 func TryMap[In, Out any](p Pipe[In], fn TryMapFunc[In, Out]) Pipe[Out] {
+
+	// This is a workaround to fix the "yield after close" edge-case
+	// of functions like GroupBy, Chunk etc.
+	//
+	// Context:
+	//
+	// Some upstream stages (e.g. GroupBy, Chunk) may fully drain their parent
+	// iterator before yielding their final value. Since the root iterator closes
+	// the shared error channel once its sequence completes, a downstream faillible
+	// stage (like TryMap) may attempt to send an error *after* that channel has
+	// already been closed, causing:
+	//
+	//     panic: send on closed channel
+	//
+	// To prevent this, TryMap does not reuse the upstream error channel.
+	// Instead, it creates its own local error channel and forwards upstream
+	// errors into it via a dedicated goroutine.
+	//
+	// Close ordering is explicitly synchronized:
+	//
+	//   1. Upstream closes p.errors once its sequence completes.
+	//   2. The forwarding goroutine drains p.errors.
+	//   3. TryMap.seq signals completion via the `done` channel.
+	//   4. Only after both (2) and (3) occur does the forwarding goroutine
+	//      close localErr.
+	//
+	// This is a stupid workaround, a more robust solution would require
+	// centralizing error channel ownership at the terminal operation.
+	// Unfortunately, I still havent found a way to do that without
+	// fundamentally changing the API.
+	//
+	// TODO: Find a better solution
+
+	localErr := make(chan error)
+	done := make(chan struct{})
+	go func() {
+		for e := range p.errors {
+			localErr <- e
+		}
+		<-done
+		close(localErr)
+	}()
+
 	return Pipe[Out]{
-		errors: p.errors,
+		errors: localErr,
 		seq: func(yield func(Out) bool) {
+			defer close(done)
 			for in := range p.seq {
 				result, err := fn(in)
 				if err != nil {
-					p.errors <- &PipeError{
+					localErr <- &PipeError{
 						Item:   in,
 						Reason: err,
 					}
