@@ -1,8 +1,11 @@
 package pipefn_test
 
 import (
-	"github.com/KasperOmsK/pipefn"
+	"fmt"
 	"testing"
+
+	"github.com/KasperOmsK/pipefn"
+	"github.com/KasperOmsK/pipefn/internal/iterx"
 
 	"github.com/stretchr/testify/require"
 )
@@ -41,5 +44,48 @@ func TestTap_NoFunc(t *testing.T) {
 	require.Panics(t, func() {
 		pipe.Tap(nil)
 	})
+}
 
+func TestTryMapErrorChannelRace(t *testing.T) {
+	const iterations = 10000
+
+	for range iterations {
+
+		// Large input to increase scheduling interleavings
+		inputData := make([]int, 1000)
+		for i := range 999 {
+			inputData[i] = i
+		}
+		inputData[999] = 42 // sentinel for failure
+
+		input := pipefn.From(iterx.FromSlice(inputData))
+
+		// Force eager draining
+		grouped := pipefn.GroupBy(input, func(i int) int {
+			return i / 10
+		})
+
+		// Fail only on the LAST group
+		mapped := pipefn.TryMap(grouped, func(in []int) (int, error) {
+			sum := 0
+			for _, v := range in {
+				sum += v
+			}
+			if in[len(in)-1] == 42 {
+				return 0, fmt.Errorf("late failure")
+			}
+			return sum, nil
+		})
+
+		it, errs := mapped.Results()
+
+		go func() {
+			for range it {
+				break
+			}
+		}()
+
+		for range errs {
+		}
+	}
 }
