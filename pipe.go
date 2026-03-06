@@ -30,12 +30,14 @@ type (
 	}
 )
 
-func (pe *PipeError) Error() string {
-	return fmt.Sprintf("%+v: %s", pe.Item, pe.Reason)
-}
-
-// From creates a new Pipe that produces values from the provided iter.Seq.
+// From creates a Pipe that produces values from the provided iter.Seq.
+//
+// From panics if seq is nil.
 func From[T any](seq iter.Seq[T]) Pipe[T] {
+
+	if seq == nil {
+		panic("pipefn.From: nil seq")
+	}
 
 	p := Pipe[T]{
 		errors: make(chan error),
@@ -51,6 +53,49 @@ func From[T any](seq iter.Seq[T]) Pipe[T] {
 	}
 
 	return p
+}
+
+// FromSlice creates a Pipe that produces the elements of elems in order.
+//
+// The resulting Pipe yields each element of the slice sequentially.
+// The slice is not copied; iteration reads directly from elems.
+//
+// If elems is nil, the resulting Pipe behaves as an empty pipe.
+func FromSlice[T any](elems []T) Pipe[T] {
+	return From(func(yield func(T) bool) {
+		for _, e := range elems {
+			if !yield(e) {
+				return
+			}
+		}
+	})
+}
+
+// FromChan creates a Pipe that produces values received from ch.
+//
+// The resulting Pipe yields each value read from the channel until the
+// channel is closed. If the downstream consumer stops iteration early
+// (i.e., yield returns false), iteration stops immediately and remaining
+// values in the channel are ignored.
+//
+// FromChan does not close the provided channel; channel lifecycle remains
+// the responsibility of the caller.
+func FromChan[T any](ch <-chan T) Pipe[T] {
+	return From(func(yield func(T) bool) {
+		for c := range ch {
+			if !yield(c) {
+				return
+			}
+		}
+	})
+}
+
+// Empty returns a Pipe that produces no values.
+//
+// The returned Pipe completes immediately when iterated and
+// yields no elements and no errors.
+func Empty[T any]() Pipe[T] {
+	return From(func(yield func(T) bool) {})
 }
 
 // Results returns an iterator that yields the values produced by p,
@@ -195,4 +240,8 @@ func (p *Pipe[T]) Tap(tapFn func(T)) {
 			}
 		}
 	}
+}
+
+func (pe *PipeError) Error() string {
+	return fmt.Sprintf("%+v: %s", pe.Item, pe.Reason)
 }
