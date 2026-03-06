@@ -101,8 +101,8 @@ func Empty[T any]() Pipe[T] {
 // Results returns an iterator that yields the values produced by p,
 // and a channel that emits the errors produced by p.
 //
-// Iterating over the values iterator consumes p. Once iteration begins,
-// p cannot be reused, restarted, or iterated again.
+// The returned iterator may be consumed exactly once.
+// Starting iteration consumes the pipe; subsequent iterations are undefined.
 //
 // Callers must drain the errors chan. If errors are not consumed,
 // the pipeline may block when a stage attempts to send an error.
@@ -110,7 +110,7 @@ func Empty[T any]() Pipe[T] {
 // Callers that wish to consume a pipe without having to handle errors should
 // use p.Values() instead.
 //
-// All errors emited by Results will be of type *PipeError.
+// All errors emitted by Results will be of type *PipeError.
 //
 // Typical usage:
 //
@@ -121,7 +121,7 @@ func Empty[T any]() Pipe[T] {
 //	go func() {
 //	    defer wg.Done()
 //	    for err := range errs {
-//		perr := (*PipeError)
+//		perr := err.(*PipeError)
 //	        log.Printf("pipeline error: item %v: %s", perr.Item, perr.Reason)
 //	    }
 //	}()
@@ -141,8 +141,8 @@ func (p Pipe[T]) Results() (iter.Seq[T], <-chan error) {
 // internally and discarded. This allows callers who do not care about errors
 // to ignore them while still ensuring the pipe completes correctly.
 //
-// Iterating over the returned values sequence consumes p. Once iteration
-// begins, p cannot be reused or iterated again.
+// The returned iterator may be consumed exactly once.
+// Starting iteration consumes the pipe; subsequent iterations are undefined.
 //
 // Typical usage:
 //
@@ -162,8 +162,8 @@ func (p Pipe[T]) Values() (values iter.Seq[T]) {
 //
 // Errors produced by the pipe are forwarded to errorFn.
 //
-// consumeFn and errorFn are executed concurrently. If shared state is accessed,
-// the caller is responsible for ensuring proper synchronization.
+// The order of calls to consumeFn relative to errorFn is not guaranteed.
+// If both handlers access shared state, the caller must synchronize access.
 //
 // ForEach blocks until all values and errors have been processed.
 func (p Pipe[T]) ForEach(consumeFn func(item T), errorFn func(err error)) {
