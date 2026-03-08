@@ -176,7 +176,7 @@ func Empty[T any]() Pipe[T] {
 //	go func() {
 //	    defer wg.Done()
 //	    for err := range errs {
-//	        perr := (*PipeError)(err)
+//	        perr := err.(*PipeError)
 //	        log.Printf("pipeline error: item %v: %s", perr.Item, perr.Reason)
 //	    }
 //	}()
