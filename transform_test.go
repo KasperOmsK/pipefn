@@ -141,39 +141,38 @@ func TestMerge(t *testing.T) {
 	require.Empty(t, errs)
 }
 
-//
-//func TestMerge_ForwardsErrors(t *testing.T) {
-//	// Pipe 1: values 1, 2, emits an error for 2
-//	pipe1 := pipefn.From(seqOf(1, 2))
-//	pipe1 = pipefn.TryMap(pipe1, func(v int) (int, error) {
-//		if v == 2 {
-//			return 0, fmt.Errorf("pipe1 error")
-//		}
-//		return v, nil
-//	})
-//
-//	// Pipe 2: values 3, 4, emits an error for 4
-//	pipe2 := pipefn.From(seqOf(3, 4))
-//	pipe2 = pipefn.TryMap(pipe2, func(v int) (int, error) {
-//		if v == 4 {
-//			return 0, fmt.Errorf("pipe2 error")
-//		}
-//		return v, nil
-//	})
-//
-//	merged := pipefn.Merge(pipe1, pipe2)
-//
-//	vals, errs := collect(merged)
-//
-//	// All successful values should be present
-//	require.ElementsMatch(t, []int{1, 3}, vals)
-//
-//	// Errors from both pipes should be reported
-//	require.Len(t, errs, 2)
-//	errorMsgs := []string{toPipelineError(errs[0]).Reason.Error(), toPipelineError(errs[1]).Reason.Error()}
-//	require.Contains(t, errorMsgs, "pipe1 error")
-//	require.Contains(t, errorMsgs, "pipe2 error")
-//}
+func TestMerge_ForwardsErrors(t *testing.T) {
+	// Pipe 1: values 1, 2, emits an error for 2
+	pipe1 := pipefn.From(seqOf(1, 2))
+	pipe1 = pipefn.TryMap(pipe1, func(v int) (int, error) {
+		if v == 2 {
+			return 0, fmt.Errorf("pipe1 error")
+		}
+		return v, nil
+	})
+
+	// Pipe 2: values 3, 4, emits an error for 4
+	pipe2 := pipefn.From(seqOf(3, 4))
+	pipe2 = pipefn.TryMap(pipe2, func(v int) (int, error) {
+		if v == 4 {
+			return 0, fmt.Errorf("pipe2 error")
+		}
+		return v, nil
+	})
+
+	merged := pipefn.Merge(pipe1, pipe2)
+
+	vals, errs := collect(merged)
+
+	// All successful values should be present
+	require.ElementsMatch(t, []int{1, 3}, vals)
+
+	// Errors from both pipes should be reported
+	require.Len(t, errs, 2)
+	errorMsgs := []string{toPipelineError(errs[0]).Reason.Error(), toPipelineError(errs[1]).Reason.Error()}
+	require.Contains(t, errorMsgs, "pipe1 error")
+	require.Contains(t, errorMsgs, "pipe2 error")
+}
 
 func TestFlatTryMap(t *testing.T) {
 	// tests that FlatTryMap behaves identically to Flatten(TryMap)
