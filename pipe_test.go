@@ -14,7 +14,7 @@ func TestFrom(t *testing.T) {
 	pipe := pipefn.From(seqOf(1, 2, 3))
 
 	var out []int
-	for v := range pipe.Values() {
+	for v := range pipe.Values().Seq {
 		out = append(out, v)
 	}
 
@@ -80,7 +80,7 @@ func TestTryMapErrorChannelRace(t *testing.T) {
 		it, errs := mapped.Results()
 
 		go func() {
-			for range it {
+			for range it.Seq {
 				break
 			}
 		}()

@@ -371,7 +371,7 @@ func collect[T any](p pipefn.Pipe[T]) ([]T, []error) {
 		close(done)
 	}()
 
-	for v := range valsCh {
+	for v := range valsCh.Seq {
 		vals = append(vals, v)
 	}
 

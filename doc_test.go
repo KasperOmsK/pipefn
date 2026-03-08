@@ -57,21 +57,27 @@ func Example() {
 
 	batches := pipefn.Chunk(validItems, 2)
 
-	// Convert Pipe back to iter.Seq for consumption
-	vals, errs := batches.Results()
+	// retreive the value stream and the pipeline errors channel
+	values, errs := batches.Results()
 
-	// Errors *must* be consumed concurrently to avoid blocking the pipeline.
+	// Pipeline errors *must* be consumed concurrently to avoid blocking the pipeline.
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		for err := range errs {
-			fmt.Println("pipeline error:", err)
+			// errors emitted errs will always be of type *PipeError
+			perr := err.(*pipefn.PipeError)
+			fmt.Printf("pipeline error: item: %v, reason: %s\n", perr.Item, perr.Reason)
 		}
 	}()
 
+	// Or alternatively, if you're only interested in successful values of the pipeline...
+	//	values := batches.Values()
+	// ... will only return the value stream and silently discard pipeline errors.
+
 	batchCount := 0
-	for batch := range vals {
+	for batch := range values.Seq {
 		fmt.Println("batch:", batchCount)
 		err := ProcessBatch(batch)
 		if err != nil {
@@ -80,6 +86,29 @@ func Example() {
 		batchCount++
 	}
 	wg.Wait()
+
+	// values.Err() returns any terminal failure of the pipe.
+	//
+	// A non-nil error here indicates that the pipeline as a whole failed,
+	// regardless of any items that were successfully processed.
+	//
+	// In this example, such an error means the work done by ProcessBatch
+	// should be discarded, so we call Rollback(). Otherwise, if no terminal
+	// failure occurred, we can safely commit the processed batches.
+	if err := values.Err(); err != nil {
+		Rollback()
+	} else {
+		Commit()
+	}
+
+}
+
+func Rollback() {
+	fmt.Println("work rollbacked :()")
+}
+
+func Commit() {
+	fmt.Println("work commited !")
 }
 
 func IterateFile(path string) iter.Seq[string] {
