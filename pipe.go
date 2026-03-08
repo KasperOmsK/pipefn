@@ -66,7 +66,6 @@ func From[T any](seq iter.Seq[T]) Pipe[T] {
 	}
 
 	p.values.Seq = func(yield func(T) bool) {
-		defer close(p.errors)
 		for item := range seq {
 			if !yield(item) {
 				return
@@ -98,7 +97,6 @@ func FromCursor[T any](cursor Cursor[T]) Pipe[T] {
 	}
 
 	p.values.Seq = func(yield func(T) bool) {
-		defer close(p.errors)
 		for cursor.Next() {
 			if !yield(cursor.Value()) {
 				return
@@ -193,7 +191,18 @@ func Empty[T any]() Pipe[T] {
 //	wg.Wait()
 //	// at this point, both values and errs have been fully consumed.
 func (p Pipe[T]) Results() (values Stream[T], errors <-chan error) {
-	return p.values, p.errors
+	terminalStream := Stream[T]{
+		errFunc: p.values.errFunc,
+		Seq: func(yield func(T) bool) {
+			defer close(p.errors)
+			for i := range p.values.Seq {
+				if !yield(i) {
+					return
+				}
+			}
+		},
+	}
+	return terminalStream, p.errors
 }
 
 // Values returns the sequence of values produced by p.
