@@ -30,14 +30,16 @@ type (
 func Map[In, Out any](p Pipe[In], fn MapFunc[In, Out]) Pipe[Out] {
 	return Pipe[Out]{
 		errors: p.errors,
-		seq: func(yield func(Out) bool) {
-			for in := range p.seq {
-				if !yield(fn(in)) {
-					return
+		values: Stream[Out]{
+			errFunc: p.values.errFunc,
+			Seq: func(yield func(Out) bool) {
+				for in := range p.values.Seq {
+					if !yield(fn(in)) {
+						return
+					}
 				}
-			}
-		},
-	}
+			},
+		}}
 }
 
 // FlatMap transforms each input value using fn and returns a Pipe producing
@@ -100,21 +102,24 @@ func TryMap[In, Out any](p Pipe[In], fn TryMapFunc[In, Out]) Pipe[Out] {
 
 	return Pipe[Out]{
 		errors: localErr,
-		seq: func(yield func(Out) bool) {
-			defer close(done)
-			for in := range p.seq {
-				result, err := fn(in)
-				if err != nil {
-					localErr <- &PipeError{
-						Item:   in,
-						Reason: err,
+		values: Stream[Out]{
+			errFunc: p.values.errFunc,
+			Seq: func(yield func(Out) bool) {
+				defer close(done)
+				for in := range p.values.Seq {
+					result, err := fn(in)
+					if err != nil {
+						localErr <- &PipeError{
+							Item:   in,
+							Reason: err,
+						}
+						continue
 					}
-					continue
+					if !yield(result) {
+						return
+					}
 				}
-				if !yield(result) {
-					return
-				}
-			}
+			},
 		},
 	}
 }
@@ -138,14 +143,17 @@ func FlatTryMap[In, Out any](p Pipe[In], fn TryMapFunc[In, []Out]) Pipe[Out] {
 func Filter[T any](p Pipe[T], predicate Predicate[T]) Pipe[T] {
 	return Pipe[T]{
 		errors: p.errors,
-		seq: func(yield func(T) bool) {
-			for in := range p.seq {
-				if predicate(in) {
-					if !yield(in) {
-						return
+		values: Stream[T]{
+			errFunc: p.values.errFunc,
+			Seq: func(yield func(T) bool) {
+				for in := range p.values.Seq {
+					if predicate(in) {
+						if !yield(in) {
+							return
+						}
 					}
 				}
-			}
+			},
 		},
 	}
 }
@@ -157,14 +165,17 @@ func Filter[T any](p Pipe[T], predicate Predicate[T]) Pipe[T] {
 func Flatten[T any](p Pipe[[]T]) Pipe[T] {
 	out := Pipe[T]{
 		errors: p.errors,
-		seq: func(yield func(T) bool) {
-			for slice := range p.seq {
-				for _, item := range slice {
-					if !yield(item) {
-						return
+		values: Stream[T]{
+			errFunc: p.values.errFunc,
+			Seq: func(yield func(T) bool) {
+				for slice := range p.values.Seq {
+					for _, item := range slice {
+						if !yield(item) {
+							return
+						}
 					}
 				}
-			}
+			},
 		},
 	}
 	return out
@@ -184,54 +195,57 @@ func Chunk[T any](p Pipe[T], chunkSize int) Pipe[[]T] {
 
 	return Pipe[[]T]{
 		errors: p.errors,
-		seq: func(yield func([]T) bool) {
+		values: Stream[[]T]{
+			errFunc: p.values.errFunc,
+			Seq: func(yield func([]T) bool) {
 
-			// NOTE: A previous version of Chunk reused the same backing slice between
-			// yields. This caused aliasing issues: if a chunk was kept by the caller and
-			// the buffer was reused for the next chunk, previously emitted data could
-			// appear to change.
-			//
-			// I initially documented this and required callers to copy the slice if
-			// they needed to retain it. In practice, this is not a good API:
-			//   1) Callers cannot reasonably know whether retaining the slice is safe
-			//      without understanding how the pipeline is built.
-			//   2) Some primitives (e.g. Collect) retain values by design.
-			//
-			// To guarantee correct behavior in all cases, each chunk must have its own
-			// backing slice.
-			//
-			// An alternative implementation would allocate a single backing slice
-			// and yield subslices of it for each chunk.
-			//
-			// This approach is more cache-friendly (since the allocated memory is contiguous)
-			// and reduces the number of allocations. However, it is less GC-friendly. Since
-			// Go’s GC cannot reclaim parts of a backing array independently, the entire
-			// buffer would remain alive as long as *any* subslice is still referenced.
-			//
-			// In other words, memory would only be freed once all references to all subslices
-			// are gone. If some chunks are retained while others are dropped, the whole
-			// backing array stays in memory.
-			//
-			// I have not yet decided whether this trade-off is preferable to the current
-			// (simpler) implementation. In practice, it is unlikely that only some chunks
-			// are retained, but if that does happen, it could lead to unexpectedly high
-			// memory retention.
+				// NOTE: A previous version of Chunk reused the same backing slice between
+				// yields. This caused aliasing issues: if a chunk was kept by the caller and
+				// the buffer was reused for the next chunk, previously emitted data could
+				// appear to change.
+				//
+				// I initially documented this and required callers to copy the slice if
+				// they needed to retain it. In practice, this is not a good API:
+				//   1) Callers cannot reasonably know whether retaining the slice is safe
+				//      without understanding how the pipeline is built.
+				//   2) Some primitives (e.g. Collect) retain values by design.
+				//
+				// To guarantee correct behavior in all cases, each chunk must have its own
+				// backing slice.
+				//
+				// An alternative implementation would allocate a single backing slice
+				// and yield subslices of it for each chunk.
+				//
+				// This approach is more cache-friendly (since the allocated memory is contiguous)
+				// and reduces the number of allocations. However, it is less GC-friendly. Since
+				// Go’s GC cannot reclaim parts of a backing array independently, the entire
+				// buffer would remain alive as long as *any* subslice is still referenced.
+				//
+				// In other words, memory would only be freed once all references to all subslices
+				// are gone. If some chunks are retained while others are dropped, the whole
+				// backing array stays in memory.
+				//
+				// I have not yet decided whether this trade-off is preferable to the current
+				// (simpler) implementation. In practice, it is unlikely that only some chunks
+				// are retained, but if that does happen, it could lead to unexpectedly high
+				// memory retention.
 
-			accum := make([]T, 0, chunkSize)
-			for i := range p.seq {
-				if len(accum) >= chunkSize {
-					if !yield(accum) {
-						return
+				accum := make([]T, 0, chunkSize)
+				for i := range p.values.Seq {
+					if len(accum) >= chunkSize {
+						if !yield(accum) {
+							return
+						}
+						accum = make([]T, 0, chunkSize)
 					}
-					accum = make([]T, 0, chunkSize)
+
+					accum = append(accum, i)
 				}
 
-				accum = append(accum, i)
-			}
-
-			if len(accum) > 0 {
-				yield(accum)
-			}
+				if len(accum) > 0 {
+					yield(accum)
+				}
+			},
 		},
 	}
 }
@@ -258,25 +272,28 @@ func Chunk[T any](p Pipe[T], chunkSize int) Pipe[[]T] {
 func GroupBy[T any, K comparable](p Pipe[T], keyFunc func(T) K) Pipe[[]T] {
 	return Pipe[[]T]{
 		errors: p.errors,
-		seq: func(yield func([]T) bool) {
-			accum := make([]T, 0)
-			var currentGroupKey K
-			for i := range p.seq {
-				k := keyFunc(i)
-				if k != currentGroupKey && len(accum) > 0 {
-					if !yield(accum) {
-						return
+		values: Stream[[]T]{
+			errFunc: p.values.errFunc,
+			Seq: func(yield func([]T) bool) {
+				accum := make([]T, 0)
+				var currentGroupKey K
+				for i := range p.values.Seq {
+					k := keyFunc(i)
+					if k != currentGroupKey && len(accum) > 0 {
+						if !yield(accum) {
+							return
+						}
+						accum = make([]T, 0)
 					}
-					accum = make([]T, 0)
+					currentGroupKey = k
+					accum = append(accum, i)
 				}
-				currentGroupKey = k
-				accum = append(accum, i)
-			}
 
-			// yield the last group
-			if len(accum) > 0 {
-				yield(accum)
-			}
+				// yield the last group
+				if len(accum) > 0 {
+					yield(accum)
+				}
+			},
 		},
 	}
 }
@@ -324,43 +341,71 @@ func GroupByAggregate[In any, K comparable, Out any](
 
 	return Pipe[Out]{
 		errors: p.errors,
-		seq: func(yield func(Out) bool) {
-			var acc *Out
-			var currentGroupKey K
-			for i := range p.seq {
-				k := keyFunc(i)
-				if k != currentGroupKey && acc != nil {
-					if !yield(*acc) {
-						return
+		values: Stream[Out]{
+			errFunc: p.values.errFunc,
+			Seq: func(yield func(Out) bool) {
+				var acc *Out
+				var currentGroupKey K
+				for i := range p.values.Seq {
+					k := keyFunc(i)
+					if k != currentGroupKey && acc != nil {
+						if !yield(*acc) {
+							return
+						}
+						acc = nil
 					}
-					acc = nil
+
+					if acc == nil {
+						// new group
+						newAcc := initFunc(i)
+						acc = &newAcc
+					}
+
+					currentGroupKey = k
+					updateFunc(acc, i)
 				}
 
-				if acc == nil {
-					// new group
-					newAcc := initFunc(i)
-					acc = &newAcc
+				// yield last aggregate
+				if acc != nil {
+					yield(*acc)
 				}
 
-				currentGroupKey = k
-				updateFunc(acc, i)
-			}
-
-			// yield last aggregate
-			if acc != nil {
-				yield(*acc)
-			}
-
+			},
 		},
 	}
 }
 
 // Merge combines multiple pipes into a single pipe that yields all values
-// produced by the input pipes.
+// and errors produced by the input pipes.
 //
-// Values from different pipes may appear in any order. Errors from all input
-// pipes are merged into the returned pipe's error channel.
-func Merge[T any](pipes ...Pipe[T]) Pipe[T] {
+// Values and errors emitted by different pipes may appear in any order.
+//
+// Terminal pipeline failure is reported through the merged pipe's value
+// stream. After the stream has been fully consumed, Stream.Err() returns
+// the first terminal error encountered among the merged streams.
+//
+// Example:
+//
+//	merged := Merge(p1, p2, p3)
+//
+//	values, errs := merged.Results()
+//
+//	// drain pipeline errors
+//	go func() {
+//		for err := range errs {
+//	        	log.Printf("pipeline error: %v", err)
+//	    	}
+//	}()
+//
+//	for v := range values.Seq {
+//		process(v)
+//	}
+//
+//	// if non nil, values.Err() reports the first terminal failure encountered
+//	if err := values.Err(); err != nil {
+//		// handle terminal failure
+//	}
+func Merge[T any](pipes ...Pipe[T]) (merged Pipe[T]) {
 	if len(pipes) == 0 {
 		return From(iterx.FromSlice(make([]T, 0)))
 	}
@@ -370,20 +415,52 @@ func Merge[T any](pipes ...Pipe[T]) Pipe[T] {
 	}
 
 	allErrors := make([]chan error, 0, len(pipes))
-	allValues := make([]iter.Seq[T], 0, len(pipes))
+	allValues := make([]Stream[T], 0, len(pipes))
 
 	for _, p := range pipes {
-		allValues = append(allValues, p.seq)
+		allValues = append(allValues, p.values)
 		allErrors = append(allErrors, p.errors)
 	}
 
 	return Pipe[T]{
-		seq:    mergeIterators(allValues...),
+		values: mergeStreams(allValues...),
 		errors: mergeChans(allErrors...),
 	}
 }
 
-func mergeIterators[T any](ins ...iter.Seq[T]) iter.Seq[T] {
+// NOTE:
+// Currently, if one of the input streams fails, mergeStreams continues sending
+// values from the other streams and only stops once all streams have finished.
+// This behavior is suboptimal: according to the Stream contract, a non-nil Err()
+// should indicate that the entire merged stream is invalid.
+//
+// FIXME: mergeStreams should abort early as soon as any upstream Stream reports an error.
+func mergeStreams[T any](ins ...Stream[T]) Stream[T] {
+	seqs := make([]iter.Seq[T], 0, len(ins))
+
+	for _, seq := range ins {
+		seqs = append(seqs, seq.Seq)
+	}
+
+	mergedSeqs := mergeSeqs(seqs...)
+	mergedErrFunc := func() error {
+		for _, ei := range ins {
+			if ei.errFunc != nil {
+				if firstErr := ei.errFunc(); firstErr != nil {
+					return firstErr
+				}
+			}
+		}
+		return nil
+	}
+
+	return Stream[T]{
+		Seq:     mergedSeqs,
+		errFunc: mergedErrFunc,
+	}
+}
+
+func mergeSeqs[T any](ins ...iter.Seq[T]) iter.Seq[T] {
 
 	return func(yield func(T) bool) {
 		mergedItemsChan := make(chan T)
