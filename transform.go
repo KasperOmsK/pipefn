@@ -371,35 +371,38 @@ func Merge[T any](pipes ...Pipe[T]) (merged Pipe[T]) {
 		return pipes[0]
 	}
 
-	allErrors := make([]chan error, 0, len(pipes))
+	allErrors := make([]<-chan error, 0, len(pipes))
 	allValues := make([]Stream[T], 0, len(pipes))
 
 	for _, p := range pipes {
-		allValues = append(allValues, p.values)
-		allErrors = append(allErrors, p.errors)
+		// NOTE:
+		// Important: call p.Results() instead of accessing p.values / p.errors directly.
+		// Results() ensures the pipe's error channel is closed once the value stream
+		// has been fully consumed. Merge relies on this behavior to know when each
+		// upstream pipe has finished emitting errors.
+		// Since Merge aggregates multiple pipes, it must wait for all upstream
+		// error channels to close before closing the merged error channel.
+		values, errs := p.Results()
+		allValues = append(allValues, values)
+		allErrors = append(allErrors, errs)
 	}
 
+	// these shenanigans work but there as to be a simpler way !
+	//
+	// FIXME: rework the Merge primitive from the ground up to both:
+
+	var wg sync.WaitGroup
+	mergedErrors := mergeChans(&wg, allErrors...)
+
 	return Pipe[T]{
-		values: mergeStreams(allValues...),
-		errors: mergeChans(allErrors...),
+		values: mergeStreams(&wg, allValues...),
+		errors: mergedErrors,
 	}
 }
 
-// NOTE:
-// Currently, if one of the input streams fails, mergeStreams continues sending
-// values from the other streams and only stops once all streams have finished.
-// This behavior is suboptimal: according to the Stream contract, a non-nil Err()
-// should indicate that the entire merged stream is invalid.
-//
-// FIXME: mergeStreams should abort early as soon as any upstream Stream reports an error.
-func mergeStreams[T any](ins ...Stream[T]) Stream[T] {
-	seqs := make([]iter.Seq[T], 0, len(ins))
+func mergeStreams[T any](waitFor *sync.WaitGroup, ins ...Stream[T]) Stream[T] {
 
-	for _, seq := range ins {
-		seqs = append(seqs, seq.Seq)
-	}
-
-	mergedSeqs := mergeSeqs(seqs...)
+	mergedSeqs := mergeSeqs(waitFor, ins...)
 	mergedErrFunc := func() error {
 		for _, ei := range ins {
 			if ei.errFunc != nil {
@@ -417,11 +420,12 @@ func mergeStreams[T any](ins ...Stream[T]) Stream[T] {
 	}
 }
 
-func mergeSeqs[T any](ins ...iter.Seq[T]) iter.Seq[T] {
+func mergeSeqs[T any](waitFor *sync.WaitGroup, ins ...Stream[T]) (mergedSeq iter.Seq[T]) {
 
 	return func(yield func(T) bool) {
 		mergedItemsChan := make(chan T)
-		done := make(chan struct{})
+		downStreamDone := make(chan struct{})
+		upstreamDone := make(chan struct{})
 		var wg sync.WaitGroup
 
 		wg.Add(len(ins))
@@ -432,21 +436,27 @@ func mergeSeqs[T any](ins ...iter.Seq[T]) iter.Seq[T] {
 		}()
 
 		for _, in := range ins {
-			go func(wg *sync.WaitGroup, it iter.Seq[T]) {
+			go func(wg *sync.WaitGroup, it Stream[T]) {
 				defer wg.Done()
-				for item := range it {
+				for item := range it.Seq {
 					select {
 					case mergedItemsChan <- item:
-					case <-done:
+					case <-downStreamDone:
+						return
+					case <-upstreamDone:
 						return
 					}
+				}
+				if it.Err() != nil {
+					// this stream had a terminal error, tell other goroutines to stop producing
+					close(upstreamDone)
 				}
 			}(&wg, in)
 		}
 		for i := range mergedItemsChan {
 			if !yield(i) {
 				// tell input iterators to stop producing
-				close(done)
+				close(downStreamDone)
 				go func() {
 					// drain remaining items that were already sent
 					for range mergedItemsChan {
@@ -456,13 +466,14 @@ func mergeSeqs[T any](ins ...iter.Seq[T]) iter.Seq[T] {
 				return
 			}
 		}
+
+		waitFor.Wait()
 	}
 }
 
-func mergeChans[T any](chans ...chan T) chan T {
+func mergeChans[T any](mergeWg *sync.WaitGroup, chans ...<-chan T) chan T {
 	out := make(chan T)
 
-	var mergeWg sync.WaitGroup
 	mergeWg.Add(len(chans))
 	for _, ch := range chans {
 		go func() {
@@ -472,10 +483,5 @@ func mergeChans[T any](chans ...chan T) chan T {
 			}
 		}()
 	}
-
-	go func() {
-		mergeWg.Wait()
-		close(out)
-	}()
 	return out
 }

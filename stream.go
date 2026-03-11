@@ -1,6 +1,8 @@
 package pipefn
 
-import "iter"
+import (
+	"iter"
+)
 
 // Stream wraps an iter.Seq whose iteration may terminate with an error.
 //

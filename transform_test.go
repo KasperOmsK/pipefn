@@ -1,12 +1,15 @@
 package pipefn_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"github.com/KasperOmsK/pipefn"
 	"iter"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/KasperOmsK/pipefn"
 
 	"github.com/stretchr/testify/require"
 )
@@ -18,7 +21,8 @@ func TestMap_TransformsValues(t *testing.T) {
 		return v * 2
 	})
 
-	vals, errs := collect(p)
+	vals, errs, err := collect(p)
+	require.NoError(t, err)
 
 	require.Equal(t, []int{2, 4, 6}, vals)
 	require.Empty(t, errs)
@@ -34,7 +38,8 @@ func TestTryMap_ForwardsErrors(t *testing.T) {
 		return v * 10, nil
 	})
 
-	vals, errs := collect(p)
+	vals, errs, err := collect(p)
+	require.NoError(t, err)
 
 	require.Equal(t, []int{10, 30}, vals)
 	require.Len(t, errs, 2)
@@ -47,7 +52,8 @@ func TestFilter_FiltersCorrectly(t *testing.T) {
 		return v%2 == 0
 	})
 
-	vals, errs := collect(p)
+	vals, errs, err := collect(p)
+	require.NoError(t, err)
 
 	require.Equal(t, []int{2, 4}, vals)
 	require.Empty(t, errs)
@@ -70,7 +76,8 @@ func TestFilter_ForwardsErrors(t *testing.T) {
 		return v > 2
 	})
 
-	vals, errs := collect(filtered)
+	vals, errs, err := collect(filtered)
+	require.NoError(t, err)
 
 	// Only odd values greater than 2 should remain
 	require.Equal(t, []int{3, 5}, vals)
@@ -100,7 +107,8 @@ func TestChunk_GroupsCorrectly(t *testing.T) {
 
 	p := pipefn.Chunk(src, 2)
 
-	vals, errs := collect(p)
+	vals, errs, err := collect(p)
+	require.NoError(t, err)
 
 	require.Equal(t, [][]int{
 		{1, 2},
@@ -118,7 +126,8 @@ func TestFlatMap_FlattensInOrder(t *testing.T) {
 		return []int{v, v * 10}
 	})
 
-	vals, errs := collect(p)
+	vals, errs, err := collect(p)
+	require.NoError(t, err)
 
 	require.Equal(t, []int{
 		1, 10,
@@ -135,10 +144,25 @@ func TestMerge(t *testing.T) {
 
 	merged := pipefn.Merge(p1, p2)
 
-	vals, errs := collect(merged)
+	vals, errs, err := collect(merged)
+	require.NoError(t, err)
 
 	require.ElementsMatch(t, []int{1, 2, 3, 4}, vals)
 	require.Empty(t, errs)
+}
+
+type failingCursor struct{}
+
+func (fc *failingCursor) Next() bool {
+	return false
+}
+
+func (fc *failingCursor) Value() int {
+	return 0
+}
+
+func (fc *failingCursor) Err() error {
+	return fmt.Errorf("cursor error")
 }
 
 func TestMerge_ForwardsErrors(t *testing.T) {
@@ -162,7 +186,8 @@ func TestMerge_ForwardsErrors(t *testing.T) {
 
 	merged := pipefn.Merge(pipe1, pipe2)
 
-	vals, errs := collect(merged)
+	vals, errs, err := collect(merged)
+	require.NoError(t, err)
 
 	// All successful values should be present
 	require.ElementsMatch(t, []int{1, 3}, vals)
@@ -172,6 +197,37 @@ func TestMerge_ForwardsErrors(t *testing.T) {
 	errorMsgs := []string{toPipelineError(errs[0]).Reason.Error(), toPipelineError(errs[1]).Reason.Error()}
 	require.Contains(t, errorMsgs, "pipe1 error")
 	require.Contains(t, errorMsgs, "pipe2 error")
+}
+
+func TestMerge_Abort_Early(t *testing.T) {
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	defer cancel()
+
+	p1 := pipefn.From(func(yield func(int) bool) {
+		for {
+			if !yield(1) {
+				return
+			}
+		}
+	})
+	p2 := pipefn.FromCursor(&failingCursor{})
+
+	exited := make(chan struct{})
+	go func() {
+		merged := pipefn.Merge(p1, p2)
+		_, errs, err := collect(merged)
+		require.Error(t, err)
+		require.Empty(t, errs)
+		close(exited)
+	}()
+
+	select {
+	case <-ctx.Done():
+		t.Errorf("merge did not abort in a timely manner")
+	case <-exited:
+	}
+
 }
 
 func TestFlatTryMap(t *testing.T) {
@@ -193,8 +249,10 @@ func TestFlatTryMap(t *testing.T) {
 	p2 := pipefn.From(seqOf(data...))
 	v2 := pipefn.Flatten(pipefn.TryMap(p2, tryMap))
 
-	values1, errs1 := collect(v1)
-	values2, errs2 := collect(v2)
+	values1, errs1, err1 := collect(v1)
+	values2, errs2, err2 := collect(v2)
+	require.NoError(t, err1)
+	require.NoError(t, err2)
 
 	require.Equal(t, values1, values2)
 	require.Equal(t, errs1, errs2)
@@ -212,8 +270,10 @@ func TestFlatMap(t *testing.T) {
 	p2 := pipefn.From(seqOf("A,B,C", "D,E,F"))
 	v2 := pipefn.Flatten(pipefn.Map(p2, groupFn))
 
-	values1, errs1 := collect(v1)
-	values2, errs2 := collect(v2)
+	values1, errs1, err1 := collect(v1)
+	values2, errs2, err2 := collect(v2)
+	require.NoError(t, err1)
+	require.NoError(t, err2)
 
 	require.Equal(t, values1, values2)
 	require.Equal(t, errs1, errs2)
@@ -226,7 +286,8 @@ func TestGroupBy(t *testing.T) {
 	// Group consecutive letters
 	grouped := pipefn.GroupBy(input, func(s string) string { return s })
 
-	vals, errs := collect(grouped)
+	vals, errs, err := collect(grouped)
+	require.NoError(t, err)
 
 	// No errors expected
 	require.Empty(t, errs)
@@ -254,7 +315,8 @@ func TestGroupBy_ForwardsErrors(t *testing.T) {
 	// Group by value
 	grouped := pipefn.GroupBy(inputWithErr, func(v int) int { return v })
 
-	vals, errs := collect(grouped)
+	vals, errs, err := collect(grouped)
+	require.NoError(t, err)
 
 	// The values emitted should skip the elements that caused errors (2)
 	expectedVals := [][]int{
@@ -289,7 +351,8 @@ func TestGroupByAggregate_SumPerGroup(t *testing.T) {
 		func(first Record) int { return 0 },          // init accumulator
 		func(acc *int, r Record) { *acc += r.Value }) // update accumulator
 
-	vals, errs := collect(aggregated)
+	vals, errs, err := collect(aggregated)
+	require.NoError(t, err)
 
 	require.Empty(t, errs)
 	require.Equal(t, []int{3, 15, 3}, vals) // A1+A2=3, B1+B2=15, A3=3
@@ -306,7 +369,8 @@ func TestGroupByAggregate_EmptyInput(t *testing.T) {
 		func(first Record) int { return 0 },
 		func(acc *int, r Record) { *acc += r.Value })
 
-	vals, errs := collect(aggregated)
+	vals, errs, err := collect(aggregated)
+	require.NoError(t, err)
 	require.Empty(t, vals)
 	require.Empty(t, errs)
 }
@@ -333,7 +397,8 @@ func TestGroupByAggregate_PreservesErrors(t *testing.T) {
 		func(first Record) int { return 0 },
 		func(acc *int, r Record) { *acc += r.Value })
 
-	vals, errs := collect(aggregated)
+	vals, errs, err := collect(aggregated)
+	require.NoError(t, err)
 
 	// The valid values are aggregated, ignoring the ones that produced errors
 	require.Equal(t, []int{1, 10}, vals)
@@ -356,8 +421,8 @@ func seqOf[T any](values ...T) iter.Seq[T] {
 		}
 	}
 }
-func collect[T any](p pipefn.Pipe[T]) ([]T, []error) {
-	valsCh, errsCh := p.Results()
+func collect[T any](p pipefn.Pipe[T]) ([]T, []error, error) {
+	values, errors := p.Results()
 
 	var vals []T
 	var errs []error
@@ -365,16 +430,16 @@ func collect[T any](p pipefn.Pipe[T]) ([]T, []error) {
 	done := make(chan struct{})
 
 	go func() {
-		for err := range errsCh {
+		for err := range errors {
 			errs = append(errs, err)
 		}
 		close(done)
 	}()
 
-	for v := range valsCh.Seq {
+	for v := range values.Seq {
 		vals = append(vals, v)
 	}
 
 	<-done
-	return vals, errs
+	return vals, errs, values.Err()
 }
