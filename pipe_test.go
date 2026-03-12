@@ -31,7 +31,7 @@ func (c *stubCursor) Err() error {
 }
 
 func TestFrom(t *testing.T) {
-	pipe := pipefn.From(seqOf(1, 2, 3))
+	pipe := pipefn.FromSeq(seqOf(1, 2, 3))
 
 	var out []int
 	for v := range pipe.Values().Seq {
@@ -66,7 +66,7 @@ func TestFromCursor_ForwardsError(t *testing.T) {
 
 func TestTap(t *testing.T) {
 	// Test that Tap calls tap functions in the order they are declared
-	pipe := pipefn.From(seqOf(1))
+	pipe := pipefn.FromSeq(seqOf(1))
 
 	counter := 0
 
@@ -82,7 +82,7 @@ func TestTap(t *testing.T) {
 
 func TestTap_NoFunc(t *testing.T) {
 
-	pipe := pipefn.From(seqOf(1))
+	pipe := pipefn.FromSeq(seqOf(1))
 
 	require.Panics(t, func() {
 		pipe.Tap(nil)
@@ -90,7 +90,7 @@ func TestTap_NoFunc(t *testing.T) {
 }
 
 func TestYieldAfterExit(t *testing.T) {
-	input := pipefn.From(iterx.FromSlice([]int{1}))
+	input := pipefn.FromSeq(iterx.FromSlice([]int{1}))
 	grouped := pipefn.GroupBy(input, func(t int) int { return t })
 	mapped := pipefn.TryMap(grouped, func(in []int) (int, error) { return 0, fmt.Errorf("oops") })
 	require.NotPanics(t, func() {

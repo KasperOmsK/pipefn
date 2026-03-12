@@ -15,7 +15,7 @@ import (
 )
 
 func TestMap_TransformsValues(t *testing.T) {
-	src := pipefn.From(seqOf(1, 2, 3))
+	src := pipefn.FromSeq(seqOf(1, 2, 3))
 
 	p := pipefn.Map(src, func(v int) int {
 		return v * 2
@@ -29,7 +29,7 @@ func TestMap_TransformsValues(t *testing.T) {
 }
 
 func TestTryMap_ForwardsErrors(t *testing.T) {
-	src := pipefn.From(seqOf(1, 2, 3, 4))
+	src := pipefn.FromSeq(seqOf(1, 2, 3, 4))
 
 	p := pipefn.TryMap(src, func(v int) (int, error) {
 		if v%2 == 0 {
@@ -46,7 +46,7 @@ func TestTryMap_ForwardsErrors(t *testing.T) {
 }
 
 func TestFilter_FiltersCorrectly(t *testing.T) {
-	src := pipefn.From(seqOf(1, 2, 3, 4, 5))
+	src := pipefn.FromSeq(seqOf(1, 2, 3, 4, 5))
 
 	p := pipefn.Filter(src, func(v int) bool {
 		return v%2 == 0
@@ -61,7 +61,7 @@ func TestFilter_FiltersCorrectly(t *testing.T) {
 
 func TestFilter_ForwardsErrors(t *testing.T) {
 	// Input sequence
-	input := pipefn.From(seqOf(1, 2, 3, 4, 5))
+	input := pipefn.FromSeq(seqOf(1, 2, 3, 4, 5))
 
 	// Inject errors for some values using TryMap
 	inputWithErr := pipefn.TryMap(input, func(v int) (int, error) {
@@ -90,7 +90,7 @@ func TestFilter_ForwardsErrors(t *testing.T) {
 }
 
 func TestChunk_PanicInvalidChunkSize(t *testing.T) {
-	src := pipefn.From(seqOf(1, 2, 3))
+	src := pipefn.FromSeq(seqOf(1, 2, 3))
 
 	require.Panics(t, func() {
 		pipefn.Chunk(src, -1)
@@ -103,7 +103,7 @@ func TestChunk_PanicInvalidChunkSize(t *testing.T) {
 }
 
 func TestChunk_GroupsCorrectly(t *testing.T) {
-	src := pipefn.From(seqOf(1, 2, 3, 4, 5))
+	src := pipefn.FromSeq(seqOf(1, 2, 3, 4, 5))
 
 	p := pipefn.Chunk(src, 2)
 
@@ -120,7 +120,7 @@ func TestChunk_GroupsCorrectly(t *testing.T) {
 }
 
 func TestFlatMap_FlattensInOrder(t *testing.T) {
-	src := pipefn.From(seqOf(1, 2, 3))
+	src := pipefn.FromSeq(seqOf(1, 2, 3))
 
 	p := pipefn.FlatMap(src, func(v int) []int {
 		return []int{v, v * 10}
@@ -139,8 +139,8 @@ func TestFlatMap_FlattensInOrder(t *testing.T) {
 }
 
 func TestMerge(t *testing.T) {
-	p1 := pipefn.From(seqOf(1, 2))
-	p2 := pipefn.From(seqOf(3, 4))
+	p1 := pipefn.FromSeq(seqOf(1, 2))
+	p2 := pipefn.FromSeq(seqOf(3, 4))
 
 	merged := pipefn.Merge(p1, p2)
 
@@ -167,7 +167,7 @@ func (fc *failingCursor) Err() error {
 
 func TestMerge_ForwardsErrors(t *testing.T) {
 	// Pipe 1: values 1, 2, emits an error for 2
-	pipe1 := pipefn.From(seqOf(1, 2))
+	pipe1 := pipefn.FromSeq(seqOf(1, 2))
 	pipe1 = pipefn.TryMap(pipe1, func(v int) (int, error) {
 		if v == 2 {
 			return 0, fmt.Errorf("pipe1 error")
@@ -176,7 +176,7 @@ func TestMerge_ForwardsErrors(t *testing.T) {
 	})
 
 	// Pipe 2: values 3, 4, emits an error for 4
-	pipe2 := pipefn.From(seqOf(3, 4))
+	pipe2 := pipefn.FromSeq(seqOf(3, 4))
 	pipe2 = pipefn.TryMap(pipe2, func(v int) (int, error) {
 		if v == 4 {
 			return 0, fmt.Errorf("pipe2 error")
@@ -204,7 +204,7 @@ func TestMerge_Abort_Early(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
 	defer cancel()
 
-	p1 := pipefn.From(func(yield func(int) bool) {
+	p1 := pipefn.FromSeq(func(yield func(int) bool) {
 		for {
 			if !yield(1) {
 				return
@@ -243,10 +243,10 @@ func TestFlatTryMap(t *testing.T) {
 	}
 
 	data := []string{"A,B,C", "D,E,F", "G,H,I"}
-	p1 := pipefn.From(seqOf(data...))
+	p1 := pipefn.FromSeq(seqOf(data...))
 	v1 := pipefn.FlatTryMap(p1, tryMap)
 
-	p2 := pipefn.From(seqOf(data...))
+	p2 := pipefn.FromSeq(seqOf(data...))
 	v2 := pipefn.Flatten(pipefn.TryMap(p2, tryMap))
 
 	values1, errs1, err1 := collect(v1)
@@ -264,10 +264,10 @@ func TestFlatMap(t *testing.T) {
 	groupFn := func(in string) []string {
 		return strings.Split(in, ",")
 	}
-	p1 := pipefn.From(seqOf("A,B,C", "D,E,F"))
+	p1 := pipefn.FromSeq(seqOf("A,B,C", "D,E,F"))
 	v1 := pipefn.FlatMap(p1, groupFn)
 
-	p2 := pipefn.From(seqOf("A,B,C", "D,E,F"))
+	p2 := pipefn.FromSeq(seqOf("A,B,C", "D,E,F"))
 	v2 := pipefn.Flatten(pipefn.Map(p2, groupFn))
 
 	values1, errs1, err1 := collect(v1)
@@ -281,7 +281,7 @@ func TestFlatMap(t *testing.T) {
 
 func TestGroupBy(t *testing.T) {
 	// Define a simple pipe of letters
-	input := pipefn.From(seqOf("A", "A", "B", "B", "A", "C", "C", "C"))
+	input := pipefn.FromSeq(seqOf("A", "A", "B", "B", "A", "C", "C", "C"))
 
 	// Group consecutive letters
 	grouped := pipefn.GroupBy(input, func(s string) string { return s })
@@ -304,7 +304,7 @@ func TestGroupBy(t *testing.T) {
 
 func TestGroupBy_ForwardsErrors(t *testing.T) {
 	// Input values with a TryMap stage to inject errors
-	input := pipefn.From(seqOf(1, 1, 2, 2, 3))
+	input := pipefn.FromSeq(seqOf(1, 1, 2, 2, 3))
 	inputWithErr := pipefn.TryMap(input, func(v int) (int, error) {
 		if v == 2 {
 			return 0, fmt.Errorf("bad value %d", v)
@@ -338,7 +338,7 @@ func TestGroupByAggregate_SumPerGroup(t *testing.T) {
 		Value int
 	}
 
-	input := pipefn.From(seqOf(
+	input := pipefn.FromSeq(seqOf(
 		Record{"A", 1},
 		Record{"A", 2},
 		Record{"B", 10},
@@ -363,7 +363,7 @@ func TestGroupByAggregate_EmptyInput(t *testing.T) {
 		Key   string
 		Value int
 	}
-	input := pipefn.From(seqOf[Record]())
+	input := pipefn.FromSeq(seqOf[Record]())
 	aggregated := pipefn.GroupByAggregate(input,
 		func(r Record) string { return r.Key },
 		func(first Record) int { return 0 },
@@ -380,7 +380,7 @@ func TestGroupByAggregate_PreservesErrors(t *testing.T) {
 		Key   string
 		Value int
 	}
-	input := pipefn.From(seqOf(
+	input := pipefn.FromSeq(seqOf(
 		Record{"A", 1},
 		Record{"A", 2},
 		Record{"B", 10},

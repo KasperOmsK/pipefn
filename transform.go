@@ -364,7 +364,7 @@ func GroupByAggregate[In any, K comparable, Out any](
 //	}
 func Merge[T any](pipes ...Pipe[T]) (merged Pipe[T]) {
 	if len(pipes) == 0 {
-		return From(iterx.FromSlice(make([]T, 0)))
+		return FromSeq(iterx.FromSlice(make([]T, 0)))
 	}
 
 	if len(pipes) == 1 {

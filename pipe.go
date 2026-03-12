@@ -51,13 +51,13 @@ type (
 	}
 )
 
-// From creates a Pipe that produces values from the provided iter.Seq.
+// FromSeq creates a Pipe that produces values from the provided iter.Seq.
 //
-// From panics if seq is nil.
-func From[T any](seq iter.Seq[T]) Pipe[T] {
+// FromSeq panics if seq is nil.
+func FromSeq[T any](seq iter.Seq[T]) Pipe[T] {
 
 	if seq == nil {
-		panic("pipefn.From: nil seq")
+		panic("pipefn.FromSeq: nil seq")
 	}
 
 	p := Pipe[T]{
@@ -114,7 +114,7 @@ func FromCursor[T any](cursor Cursor[T]) Pipe[T] {
 //
 // If elems is nil, the resulting Pipe behaves as an empty pipe.
 func FromSlice[T any](elems []T) Pipe[T] {
-	return From(func(yield func(T) bool) {
+	return FromSeq(func(yield func(T) bool) {
 		for _, e := range elems {
 			if !yield(e) {
 				return
@@ -133,7 +133,7 @@ func FromSlice[T any](elems []T) Pipe[T] {
 // FromChan does not close the provided channel; channel lifecycle remains
 // the responsibility of the caller.
 func FromChan[T any](ch <-chan T) Pipe[T] {
-	return From(func(yield func(T) bool) {
+	return FromSeq(func(yield func(T) bool) {
 		for c := range ch {
 			if !yield(c) {
 				return
@@ -147,7 +147,7 @@ func FromChan[T any](ch <-chan T) Pipe[T] {
 // The returned Pipe completes immediately when iterated and
 // yields no elements and no errors.
 func Empty[T any]() Pipe[T] {
-	return From(func(yield func(T) bool) {})
+	return FromSeq(func(yield func(T) bool) {})
 }
 
 // Results returns a Stream that yields the values produced by p,

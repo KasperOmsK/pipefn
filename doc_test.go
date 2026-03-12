@@ -21,8 +21,8 @@ type Event struct {
 // Example demonstrates a relatively complex pipeline that parses items from (fake) event files
 func Example() {
 	// Wrap iter.Seqs into Pipes
-	input1 := pipefn.From(IterateFile("events-2023.log"))
-	input2 := pipefn.From(IterateFile("events-2024.log"))
+	input1 := pipefn.FromSeq(IterateFile("events-2023.log"))
+	input2 := pipefn.FromSeq(IterateFile("events-2024.log"))
 
 	// Merge multiple pipes of the same type.
 	p := pipefn.Merge(input1, input2)
