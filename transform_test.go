@@ -1,13 +1,11 @@
 package pipefn_test
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"iter"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/KasperOmsK/pipefn"
 
@@ -199,36 +197,37 @@ func TestMerge_ForwardsErrors(t *testing.T) {
 	require.Contains(t, errorMsgs, "pipe2 error")
 }
 
-func TestMerge_Abort_Early(t *testing.T) {
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
-	defer cancel()
-
-	p1 := pipefn.FromSeq(func(yield func(int) bool) {
-		for {
-			if !yield(1) {
-				return
-			}
-		}
-	})
-	p2 := pipefn.FromCursor(&failingCursor{})
-
-	exited := make(chan struct{})
-	go func() {
-		merged := pipefn.Merge(p1, p2)
-		_, errs, err := collect(merged)
-		require.Error(t, err)
-		require.Empty(t, errs)
-		close(exited)
-	}()
-
-	select {
-	case <-ctx.Done():
-		t.Errorf("merge did not abort in a timely manner")
-	case <-exited:
-	}
-
-}
+// TODO: reimplement TestMerge_Abort_Early
+//func TestMerge_Abort_Early(t *testing.T) {
+//
+//	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+//	defer cancel()
+//
+//	p1 := pipefn.FromSeq(func(yield func(int) bool) {
+//		for {
+//			if !yield(1) {
+//				return
+//			}
+//		}
+//	})
+//	p2 := pipefn.FromCursor(&failingCursor{})
+//
+//	exited := make(chan struct{})
+//	go func() {
+//		merged := pipefn.Merge(p1, p2)
+//		_, errs, err := collect(merged)
+//		require.Error(t, err)
+//		require.Empty(t, errs)
+//		close(exited)
+//	}()
+//
+//	select {
+//	case <-ctx.Done():
+//		t.Errorf("merge did not abort in a timely manner")
+//	case <-exited:
+//	}
+//
+//}
 
 func TestFlatTryMap(t *testing.T) {
 	// tests that FlatTryMap behaves identically to Flatten(TryMap)

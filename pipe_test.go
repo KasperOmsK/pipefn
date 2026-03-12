@@ -41,29 +41,6 @@ func TestFrom(t *testing.T) {
 	require.Equal(t, out, []int{1, 2, 3})
 }
 
-func TestFromCursor(t *testing.T) {
-	cursor := &stubCursor{
-		elems: []int{1, 2, 3},
-	}
-	pipe := pipefn.FromCursor(cursor)
-	values, errs, err := collect(pipe)
-	require.ElementsMatch(t, values, cursor.elems)
-	require.Empty(t, errs)
-	require.NoError(t, err)
-}
-
-func TestFromCursor_ForwardsError(t *testing.T) {
-	cursor := &stubCursor{
-		elems:    []int{1, 2, 3},
-		finalErr: fmt.Errorf("cursor error"),
-	}
-	pipe := pipefn.FromCursor(cursor)
-	values, errs, err := collect(pipe)
-	require.ElementsMatch(t, values, cursor.elems)
-	require.Empty(t, errs)
-	require.ErrorIs(t, err, cursor.finalErr)
-}
-
 func TestTap(t *testing.T) {
 	// Test that Tap calls tap functions in the order they are declared
 	pipe := pipefn.FromSeq(seqOf(1))

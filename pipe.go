@@ -33,22 +33,6 @@ type (
 		// The actual error
 		Reason error
 	}
-
-	// Cursor provides pull-based iteration over a sequence of values.
-	//
-	// Next advances the cursor to the next value and reports whether one
-	// is available. When Next returns false, iteration has finished or an
-	// error has occurred.
-	//
-	// After Next returns true, Value returns the current value.
-	//
-	// Once iteration stops, Err reports any terminal error that occurred
-	// during iteration. If the sequence completed successfully, Err returns nil.
-	Cursor[T any] interface {
-		Next() bool
-		Value() T
-		Err() error
-	}
 )
 
 // FromSeq creates a Pipe that produces values from the provided iter.Seq.
@@ -68,37 +52,6 @@ func FromSeq[T any](seq iter.Seq[T]) Pipe[T] {
 	p.values.Seq = func(yield func(T) bool) {
 		for item := range seq {
 			if !yield(item) {
-				return
-			}
-		}
-	}
-
-	return p
-}
-
-// FromCursor creates a Pipe that yields values from the provided Cursor.
-//
-// The returned Pipe iterates over cursor using Next and forwards each value
-// returned by Value into the pipeline until the cursor is exhausted or the
-// consumer stops iteration early.
-//
-// Any terminal error reported by Cursor.Err is exposed through the pipe's value stream
-// Err method.
-func FromCursor[T any](cursor Cursor[T]) Pipe[T] {
-	if cursor == nil {
-		panic("FromCursor: cursor is nil")
-	}
-
-	p := Pipe[T]{
-		errors: make(chan error),
-		values: Stream[T]{
-			errFunc: cursor.Err,
-		},
-	}
-
-	p.values.Seq = func(yield func(T) bool) {
-		for cursor.Next() {
-			if !yield(cursor.Value()) {
 				return
 			}
 		}
