@@ -34,7 +34,7 @@ func TestFrom(t *testing.T) {
 	pipe := pipefn.FromSeq(seqOf(1, 2, 3))
 
 	var out []int
-	for v := range pipe.Values().Seq {
+	for v := range pipe.Values().Seq() {
 		out = append(out, v)
 	}
 
@@ -46,15 +46,16 @@ func TestTap(t *testing.T) {
 	pipe := pipefn.FromSeq(seqOf(1))
 
 	counter := 0
+	actual := 0
 
 	pipe.Tap(func(i int) {
 		counter++
 	})
 	pipe.Tap(func(i int) {
-		require.NotEqual(t, counter, 0)
+		actual = counter
 	})
-
 	collect(pipe)
+	require.NotEqual(t, actual, 0)
 }
 
 func TestTap_NoFunc(t *testing.T) {

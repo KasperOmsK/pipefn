@@ -77,7 +77,7 @@ func Example() {
 	// ... will only return the value stream and silently discard pipeline errors.
 
 	batchCount := 0
-	for batch := range values.Seq {
+	for batch := range values.Seq() {
 		fmt.Println("batch:", batchCount)
 		err := ProcessBatch(batch)
 		if err != nil {

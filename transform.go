@@ -1,7 +1,7 @@
 package pipefn
 
 import (
-	"github.com/KasperOmsK/pipefn/internal/iterx"
+	"context"
 	"iter"
 	"sync"
 )
@@ -23,23 +23,37 @@ type (
 	Predicate[T any] func(item T) bool
 )
 
+func makeChildPipe[In, Out any](
+	parent Pipe[In],
+	transform func(input iter.Seq[In], errs chan<- error) iter.Seq[Out]) Pipe[Out] {
+
+	parentValues := parent.values.Seq()
+	parentFinalErr := parent.values.Err
+
+	out := Pipe[Out]{
+		header: parent.header,
+		values: seqStream[Out]{
+			errFunc: parentFinalErr,
+			seq:     transform(parentValues, parent.errors),
+		},
+	}
+	return out
+}
+
 // Map transforms each input value using fn and returns a new Pipe producing
 // the mapped values.
 //
 // Errors from the input Pipe are preserved.
 func Map[In, Out any](p Pipe[In], fn MapFunc[In, Out]) Pipe[Out] {
-	return Pipe[Out]{
-		errors: p.errors,
-		values: Stream[Out]{
-			errFunc: p.values.errFunc,
-			Seq: func(yield func(Out) bool) {
-				for in := range p.values.Seq {
-					if !yield(fn(in)) {
-						return
-					}
+	return makeChildPipe(p, func(input iter.Seq[In], errs chan<- error) iter.Seq[Out] {
+		return func(yield func(Out) bool) {
+			for in := range input {
+				if !yield(fn(in)) {
+					return
 				}
-			},
-		}}
+			}
+		}
+	})
 }
 
 // FlatMap transforms each input value using fn and returns a Pipe producing
@@ -57,28 +71,23 @@ func FlatMap[In, Out any](p Pipe[In], fn MapFunc[In, []Out]) Pipe[Out] {
 //
 // Errors from the input Pipe are preserved.
 func TryMap[In, Out any](p Pipe[In], fn TryMapFunc[In, Out]) Pipe[Out] {
-
-	return Pipe[Out]{
-		errors: p.errors,
-		values: Stream[Out]{
-			errFunc: p.values.errFunc,
-			Seq: func(yield func(Out) bool) {
-				for in := range p.values.Seq {
-					result, err := fn(in)
-					if err != nil {
-						p.errors <- &PipeError{
-							Item:   in,
-							Reason: err,
-						}
-						continue
+	return makeChildPipe(p, func(input iter.Seq[In], errs chan<- error) iter.Seq[Out] {
+		return func(yield func(Out) bool) {
+			for in := range input {
+				result, err := fn(in)
+				if err != nil {
+					p.errors <- &PipeError{
+						Item:   in,
+						Reason: err,
 					}
-					if !yield(result) {
-						return
-					}
+					continue
 				}
-			},
-		},
-	}
+				if !yield(result) {
+					return
+				}
+			}
+		}
+	})
 }
 
 // FlatTryMap transforms each input value using fn and returns a Pipe producing
@@ -98,21 +107,17 @@ func FlatTryMap[In, Out any](p Pipe[In], fn TryMapFunc[In, []Out]) Pipe[Out] {
 //
 // Errors from the input Pipe are preserved.
 func Filter[T any](p Pipe[T], predicate Predicate[T]) Pipe[T] {
-	return Pipe[T]{
-		errors: p.errors,
-		values: Stream[T]{
-			errFunc: p.values.errFunc,
-			Seq: func(yield func(T) bool) {
-				for in := range p.values.Seq {
-					if predicate(in) {
-						if !yield(in) {
-							return
-						}
+	return makeChildPipe(p, func(input iter.Seq[T], errs chan<- error) iter.Seq[T] {
+		return func(yield func(T) bool) {
+			for in := range input {
+				if predicate(in) {
+					if !yield(in) {
+						return
 					}
 				}
-			},
-		},
-	}
+			}
+		}
+	})
 }
 
 // Flatten converts a Pipe of slices into a Pipe of their elements,
@@ -120,22 +125,17 @@ func Filter[T any](p Pipe[T], predicate Predicate[T]) Pipe[T] {
 //
 // Errors from the input Pipe are preserved.
 func Flatten[T any](p Pipe[[]T]) Pipe[T] {
-	out := Pipe[T]{
-		errors: p.errors,
-		values: Stream[T]{
-			errFunc: p.values.errFunc,
-			Seq: func(yield func(T) bool) {
-				for slice := range p.values.Seq {
-					for _, item := range slice {
-						if !yield(item) {
-							return
-						}
+	return makeChildPipe(p, func(input iter.Seq[[]T], errs chan<- error) iter.Seq[T] {
+		return func(yield func(T) bool) {
+			for slice := range input {
+				for _, item := range slice {
+					if !yield(item) {
+						return
 					}
 				}
-			},
-		},
-	}
-	return out
+			}
+		}
+	})
 }
 
 // Chunk groups incoming values into slices of the given size and returns a Pipe producing those slices.
@@ -150,61 +150,56 @@ func Chunk[T any](p Pipe[T], chunkSize int) Pipe[[]T] {
 		panic("pipeline.Chunk: chunkSize must be positive")
 	}
 
-	return Pipe[[]T]{
-		errors: p.errors,
-		values: Stream[[]T]{
-			errFunc: p.values.errFunc,
-			Seq: func(yield func([]T) bool) {
+	return makeChildPipe(p, func(input iter.Seq[T], errs chan<- error) iter.Seq[[]T] {
+		return func(yield func([]T) bool) {
+			// NOTE: A previous version of Chunk reused the same backing slice between
+			// yields. This caused aliasing issues: if a chunk was kept by the caller and
+			// the buffer was reused for the next chunk, previously emitted data could
+			// appear to change.
+			//
+			// I initially documented this and required callers to copy the slice if
+			// they needed to retain it. In practice, this is not a good API:
+			//   1) Callers cannot reasonably know whether retaining the slice is safe
+			//      without understanding how the pipeline is built.
+			//   2) Some primitives (e.g. Collect) retain values by design.
+			//
+			// To guarantee correct behavior in all cases, each chunk must have its own
+			// backing slice.
+			//
+			// An alternative implementation would allocate a single backing slice
+			// and yield subslices of it for each chunk.
+			//
+			// This approach is more cache-friendly (since the allocated memory is contiguous)
+			// and reduces the number of allocations. However, it is less GC-friendly. Since
+			// Go’s GC cannot reclaim parts of a backing array independently, the entire
+			// buffer would remain alive as long as *any* subslice is still referenced.
+			//
+			// In other words, memory would only be freed once all references to all subslices
+			// are gone. If some chunks are retained while others are dropped, the whole
+			// backing array stays in memory.
+			//
+			// I have not yet decided whether this trade-off is preferable to the current
+			// (simpler) implementation. In practice, it is unlikely that only some chunks
+			// are retained, but if that does happen, it could lead to unexpectedly high
+			// memory retention.
 
-				// NOTE: A previous version of Chunk reused the same backing slice between
-				// yields. This caused aliasing issues: if a chunk was kept by the caller and
-				// the buffer was reused for the next chunk, previously emitted data could
-				// appear to change.
-				//
-				// I initially documented this and required callers to copy the slice if
-				// they needed to retain it. In practice, this is not a good API:
-				//   1) Callers cannot reasonably know whether retaining the slice is safe
-				//      without understanding how the pipeline is built.
-				//   2) Some primitives (e.g. Collect) retain values by design.
-				//
-				// To guarantee correct behavior in all cases, each chunk must have its own
-				// backing slice.
-				//
-				// An alternative implementation would allocate a single backing slice
-				// and yield subslices of it for each chunk.
-				//
-				// This approach is more cache-friendly (since the allocated memory is contiguous)
-				// and reduces the number of allocations. However, it is less GC-friendly. Since
-				// Go’s GC cannot reclaim parts of a backing array independently, the entire
-				// buffer would remain alive as long as *any* subslice is still referenced.
-				//
-				// In other words, memory would only be freed once all references to all subslices
-				// are gone. If some chunks are retained while others are dropped, the whole
-				// backing array stays in memory.
-				//
-				// I have not yet decided whether this trade-off is preferable to the current
-				// (simpler) implementation. In practice, it is unlikely that only some chunks
-				// are retained, but if that does happen, it could lead to unexpectedly high
-				// memory retention.
-
-				accum := make([]T, 0, chunkSize)
-				for i := range p.values.Seq {
-					if len(accum) >= chunkSize {
-						if !yield(accum) {
-							return
-						}
-						accum = make([]T, 0, chunkSize)
+			accum := make([]T, 0, chunkSize)
+			for i := range input {
+				if len(accum) >= chunkSize {
+					if !yield(accum) {
+						return
 					}
-
-					accum = append(accum, i)
+					accum = make([]T, 0, chunkSize)
 				}
 
-				if len(accum) > 0 {
-					yield(accum)
-				}
-			},
-		},
-	}
+				accum = append(accum, i)
+			}
+
+			if len(accum) > 0 {
+				yield(accum)
+			}
+		}
+	})
 }
 
 // GroupBy groups consecutive input values according to a key function and
@@ -227,32 +222,29 @@ func Chunk[T any](p Pipe[T], chunkSize int) Pipe[[]T] {
 //
 // Errors from the input Pipe are preserved.
 func GroupBy[T any, K comparable](p Pipe[T], keyFunc func(T) K) Pipe[[]T] {
-	return Pipe[[]T]{
-		errors: p.errors,
-		values: Stream[[]T]{
-			errFunc: p.values.errFunc,
-			Seq: func(yield func([]T) bool) {
-				accum := make([]T, 0)
-				var currentGroupKey K
-				for i := range p.values.Seq {
-					k := keyFunc(i)
-					if k != currentGroupKey && len(accum) > 0 {
-						if !yield(accum) {
-							return
-						}
-						accum = make([]T, 0)
-					}
-					currentGroupKey = k
-					accum = append(accum, i)
-				}
+	return makeChildPipe(p, func(input iter.Seq[T], errs chan<- error) iter.Seq[[]T] {
+		return func(yield func([]T) bool) {
 
-				// yield the last group
-				if len(accum) > 0 {
-					yield(accum)
+			accum := make([]T, 0)
+			var currentGroupKey K
+			for i := range input {
+				k := keyFunc(i)
+				if k != currentGroupKey && len(accum) > 0 {
+					if !yield(accum) {
+						return
+					}
+					accum = make([]T, 0)
 				}
-			},
-		},
-	}
+				currentGroupKey = k
+				accum = append(accum, i)
+			}
+
+			// yield the last group
+			if len(accum) > 0 {
+				yield(accum)
+			}
+		}
+	})
 }
 
 // GroupByAggregate groups input values by key and aggregates them using user-supplied
@@ -296,40 +288,36 @@ func GroupByAggregate[In any, K comparable, Out any](
 	initFunc func(first In) Out,
 	updateFunc func(acc *Out, item In)) Pipe[Out] {
 
-	return Pipe[Out]{
-		errors: p.errors,
-		values: Stream[Out]{
-			errFunc: p.values.errFunc,
-			Seq: func(yield func(Out) bool) {
-				var acc *Out
-				var currentGroupKey K
-				for i := range p.values.Seq {
-					k := keyFunc(i)
-					if k != currentGroupKey && acc != nil {
-						if !yield(*acc) {
-							return
-						}
-						acc = nil
+	return makeChildPipe(p, func(input iter.Seq[In], errs chan<- error) iter.Seq[Out] {
+		return func(yield func(Out) bool) {
+			var acc *Out
+			var currentGroupKey K
+			for i := range input {
+				k := keyFunc(i)
+				if k != currentGroupKey && acc != nil {
+					if !yield(*acc) {
+						return
 					}
-
-					if acc == nil {
-						// new group
-						newAcc := initFunc(i)
-						acc = &newAcc
-					}
-
-					currentGroupKey = k
-					updateFunc(acc, i)
+					acc = nil
 				}
 
-				// yield last aggregate
-				if acc != nil {
-					yield(*acc)
+				if acc == nil {
+					// new group
+					newAcc := initFunc(i)
+					acc = &newAcc
 				}
 
-			},
-		},
-	}
+				currentGroupKey = k
+				updateFunc(acc, i)
+			}
+
+			// yield last aggregate
+			if acc != nil {
+				yield(*acc)
+			}
+
+		}
+	})
 }
 
 // Merge combines multiple pipes into a single pipe that yields all values
@@ -362,126 +350,110 @@ func GroupByAggregate[In any, K comparable, Out any](
 //	if err := values.Err(); err != nil {
 //		// handle terminal failure
 //	}
-func Merge[T any](pipes ...Pipe[T]) (merged Pipe[T]) {
+func Merge[T any](pipes ...Pipe[T]) Pipe[T] {
 	if len(pipes) == 0 {
-		return FromSeq(iterx.FromSlice(make([]T, 0)))
+		return FromSlice([]T{})
 	}
 
 	if len(pipes) == 1 {
 		return pipes[0]
 	}
 
+	allStreams := make([]Stream[T], 0, len(pipes))
 	allErrors := make([]<-chan error, 0, len(pipes))
-	allValues := make([]Stream[T], 0, len(pipes))
 
+	// NOTE: The api technically allows the caller to merge pipes of the same lineage... e.g.
+	//
+	//	root := somePipe()
+	//	p1 := pipefn.Map(root, someMapFunc)
+	//	merged := pipefn.Merge(p1, root) <== This is nonsense and will have undefined behaviour
+	//
+	// To catch these programmer errors, we check if any pipe shares the same header (and thus the same lineage)
+	// and if so, panic.
+	// FIXME: checking lineage this way is dumb and wont behave nicely with Merge since Merge
+	// creates a "split" in the lineage => A merged Pipe is a new root so its *header is always a new one
+	//
+	//	p1 := somePipe()
+	//	p2 := someOtherPipe()
+	//	merged := pipefn.Merge(p1, p2)
+	//	mergedBis := pipefn.Merge(merged, p1, p2) <== The current implementation wont catch this.
 	for _, p := range pipes {
-		// NOTE:
-		// Important: call p.Results() instead of accessing p.values / p.errors directly.
-		// Results() ensures the pipe's error channel is closed once the value stream
-		// has been fully consumed. Merge relies on this behavior to know when each
-		// upstream pipe has finished emitting errors.
-		// Since Merge aggregates multiple pipes, it must wait for all upstream
-		// error channels to close before closing the merged error channel.
 		values, errs := p.Results()
-		allValues = append(allValues, values)
+		allStreams = append(allStreams, values)
 		allErrors = append(allErrors, errs)
 	}
 
-	// these shenanigans work but there as to be a simpler way !
-	//
-	// FIXME: rework the Merge primitive from the ground up to both:
+	mergedErrors, errDone := fanInChans(allErrors...)
 
-	var wg sync.WaitGroup
-	mergedErrors := mergeChans(&wg, allErrors...)
+	groupCtx, cancelGroup := context.WithCancel(context.Background())
+	group := fanInStreams(groupCtx, allStreams...)
+
+	waitOnce := sync.OnceValue(group.Wait)
 
 	return Pipe[T]{
-		values: mergeStreams(&wg, allValues...),
-		errors: mergedErrors,
-	}
-}
-
-func mergeStreams[T any](waitFor *sync.WaitGroup, ins ...Stream[T]) Stream[T] {
-
-	mergedSeqs := mergeSeqs(waitFor, ins...)
-	mergedErrFunc := func() error {
-		for _, ei := range ins {
-			if ei.errFunc != nil {
-				if firstErr := ei.errFunc(); firstErr != nil {
-					return firstErr
-				}
-			}
-		}
-		return nil
-	}
-
-	return Stream[T]{
-		Seq:     mergedSeqs,
-		errFunc: mergedErrFunc,
-	}
-}
-
-func mergeSeqs[T any](waitFor *sync.WaitGroup, ins ...Stream[T]) (mergedSeq iter.Seq[T]) {
-
-	return func(yield func(T) bool) {
-		mergedItemsChan := make(chan T)
-		downStreamDone := make(chan struct{})
-		upstreamDone := make(chan struct{})
-		var wg sync.WaitGroup
-
-		wg.Add(len(ins))
-
-		go func() {
-			wg.Wait()
-			close(mergedItemsChan)
-		}()
-
-		for _, in := range ins {
-			go func(wg *sync.WaitGroup, it Stream[T]) {
-				defer wg.Done()
-				for item := range it.Seq {
-					select {
-					case mergedItemsChan <- item:
-					case <-downStreamDone:
-						return
-					case <-upstreamDone:
-						return
+		header: &header{
+			errors: mergedErrors,
+		},
+		values: seqStream[T]{
+			seq: func(yield func(T) bool) {
+				defer cancelGroup()
+				go waitOnce()
+				for v := range group.Out() {
+					if !yield(v) {
+						cancelGroup()
+						break
 					}
 				}
-				if it.Err() != nil {
-					// this stream had a terminal error, tell other goroutines to stop producing
-					close(upstreamDone)
-				}
-			}(&wg, in)
-		}
-		for i := range mergedItemsChan {
-			if !yield(i) {
-				// tell input iterators to stop producing
-				close(downStreamDone)
-				go func() {
-					// drain remaining items that were already sent
-					for range mergedItemsChan {
-					}
-				}()
-
-				return
-			}
-		}
-
-		waitFor.Wait()
+				// wait for the signal that mergedErrors can be closed before stopping the Seq.
+				// we do it this way because the contract is:
+				//
+				//	all errors on pipe.header.errors *must* be sent while the Seq context is valid
+				//
+				<-errDone
+			},
+			errFunc: waitOnce,
+		},
 	}
 }
 
-func mergeChans[T any](mergeWg *sync.WaitGroup, chans ...<-chan T) chan T {
-	out := make(chan T)
+func fanInStreams[T any](ctx context.Context, streams ...Stream[T]) *fanInGroup[T] {
+	group := newFaninGroup[T](ctx)
+	for _, s := range streams {
+		group.Go(func(groupCtx context.Context, c chan<- T) error {
+		ForLoop:
+			for v := range s.Seq() {
+				select {
+				case <-groupCtx.Done():
+					break ForLoop
+				case c <- v:
+				}
+			}
 
-	mergeWg.Add(len(chans))
+			return s.Err()
+		})
+	}
+	return group
+}
+
+// fanInChans combines all chans in a single merged chan but does not close merged when all consumers are done.
+//
+// instead it closes done to notify when merged *can* be closed
+func fanInChans[T any](chans ...<-chan T) (merged chan T, done chan struct{}) {
+	merged = make(chan T)
+	done = make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(len(chans))
 	for _, ch := range chans {
 		go func() {
-			defer mergeWg.Done()
-			for e := range ch {
-				out <- e
+			defer wg.Done()
+			for item := range ch {
+				merged <- item
 			}
 		}()
 	}
-	return out
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	return merged, done
 }

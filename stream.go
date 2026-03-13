@@ -4,25 +4,32 @@ import (
 	"iter"
 )
 
-// Stream wraps an iter.Seq whose iteration may terminate with an error.
-//
-// The sequence of values is provided by the Seq field. After the
-// sequence has been fully consumed, Err reports any terminal error that
-// occurred during iteration. If iteration completed successfully, Err
-// returns nil.
-//
-// Err should be checked after the sequence has been exhausted.
-type Stream[T any] struct {
-	iter.Seq[T]
+type Stream[T any] interface {
+	Seq() iter.Seq[T]
+	Err() error
+}
+
+type seqStream[T any] struct {
+	seq     iter.Seq[T]
 	errFunc func() error
 }
 
-// Err returns any failure encountered during iteration.
-//
-// If iteration completed without error, Err() returns nil.
-func (s Stream[T]) Err() error {
-	if s.errFunc != nil {
-		return s.errFunc()
+func (ss seqStream[T]) Seq() iter.Seq[T] {
+	return ss.seq
+}
+
+func (ss seqStream[T]) Err() error {
+	if ss.errFunc != nil {
+		return ss.errFunc()
 	}
 	return nil
+}
+
+func errorStream[T any](eofErr error) Stream[T] {
+	return seqStream[T]{
+		seq: func(yield func(T) bool) {},
+		errFunc: func() error {
+			return eofErr
+		},
+	}
 }

@@ -1,8 +1,11 @@
 module github.com/KasperOmsK/pipefn
 
-go 1.23
+go 1.23.0
 
-require github.com/stretchr/testify v1.11.1
+require (
+	github.com/stretchr/testify v1.11.1
+	golang.org/x/sync v0.12.0
+)
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect

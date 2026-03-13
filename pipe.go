@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"iter"
 	"sync"
+	"sync/atomic"
 )
 
 type (
@@ -22,8 +23,8 @@ type (
 	// Values, ForEach, Collect etc. Once consumed, a Pipe cannot be reused.
 	// Refer to each consuming method's documentation for details on their behavior.
 	Pipe[T any] struct {
+		*header
 		values Stream[T]
-		errors chan error
 	}
 
 	// PipeError represents an error that occured inside a pipeline
@@ -33,31 +34,37 @@ type (
 		// The actual error
 		Reason error
 	}
+
+	header struct {
+		used   atomic.Bool
+		mu     sync.Mutex
+		errors chan error
+	}
 )
+
+func From[T any](s Stream[T]) Pipe[T] {
+	if s == nil {
+		panic("pipefn.From: stream is nil")
+	}
+
+	return Pipe[T]{
+		header: &header{
+			errors: make(chan error),
+		},
+		values: s,
+	}
+}
 
 // FromSeq creates a Pipe that produces values from the provided iter.Seq.
 //
 // FromSeq panics if seq is nil.
 func FromSeq[T any](seq iter.Seq[T]) Pipe[T] {
-
 	if seq == nil {
 		panic("pipefn.FromSeq: nil seq")
 	}
-
-	p := Pipe[T]{
-		errors: make(chan error),
-		values: Stream[T]{},
-	}
-
-	p.values.Seq = func(yield func(T) bool) {
-		for item := range seq {
-			if !yield(item) {
-				return
-			}
-		}
-	}
-
-	return p
+	return From(&seqStream[T]{
+		seq: seq,
+	})
 }
 
 // FromSlice creates a Pipe that produces the elements of elems in order.
@@ -143,19 +150,30 @@ func Empty[T any]() Pipe[T] {
 //
 //	wg.Wait()
 //	// at this point, both values and errs have been fully consumed.
-func (p Pipe[T]) Results() (values Stream[T], errors <-chan error) {
-	terminalStream := Stream[T]{
-		errFunc: p.values.errFunc,
-		Seq: func(yield func(T) bool) {
+func (p Pipe[T]) Results() (Stream[T], <-chan error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	// TODO: make the zero value of a pipe behave as an empty pipe
+
+	// if used, return a empty and "closed" stream
+	if !p.used.CompareAndSwap(false, true) {
+		errCh := make(chan error)
+		close(errCh)
+		return errorStream[T](fmt.Errorf("pipefn: pipe already consumed")), errCh
+	}
+
+	return seqStream[T]{
+		seq: func(yield func(T) bool) {
 			defer close(p.errors)
-			for i := range p.values.Seq {
-				if !yield(i) {
+			for e := range p.values.Seq() {
+				if !yield(e) {
 					return
 				}
 			}
 		},
-	}
-	return terminalStream, p.errors
+		errFunc: p.values.Err,
+	}, p.errors
 }
 
 // Values returns the sequence of values produced by p.
@@ -206,7 +224,7 @@ func (p Pipe[T]) ForEach(consumeFn func(item T), errorFn func(err error)) error 
 			errorFn(err)
 		}
 	}()
-	for i := range values.Seq {
+	for i := range values.Seq() {
 		consumeFn(i)
 	}
 	errorWg.Wait()
@@ -244,18 +262,23 @@ func (p Pipe[T]) Collect() ([]T, []error, error) {
 // Tap panics if tapFn is nil.
 func (p *Pipe[T]) Tap(tapFn func(T)) {
 
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	if tapFn == nil {
 		panic("Pipe.Tap: tapFn cannot be nil")
 	}
 
-	originalIt := p.values.Seq
-	p.values.Seq = func(yield func(T) bool) {
-		for i := range originalIt {
-			tapFn(i)
-			if !yield(i) {
-				return
+	originalIt := p.values.Seq()
+	p.values = &seqStream[T]{
+		seq: func(yield func(T) bool) {
+			for i := range originalIt {
+				tapFn(i)
+				if !yield(i) {
+					return
+				}
 			}
-		}
+		},
 	}
 }
 
