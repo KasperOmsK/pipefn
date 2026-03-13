@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/KasperOmsK/pipefn"
-	"github.com/KasperOmsK/pipefn/internal/iterx"
 
 	"github.com/stretchr/testify/require"
 )
@@ -68,7 +67,7 @@ func TestTap_NoFunc(t *testing.T) {
 }
 
 func TestYieldAfterExit(t *testing.T) {
-	input := pipefn.FromSeq(iterx.FromSlice([]int{1}))
+	input := pipefn.FromSlice([]int{1})
 	grouped := pipefn.GroupBy(input, func(t int) int { return t })
 	mapped := pipefn.TryMap(grouped, func(in []int) (int, error) { return 0, fmt.Errorf("oops") })
 	require.NotPanics(t, func() {
