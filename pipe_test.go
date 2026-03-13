@@ -9,26 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type stubCursor struct {
-	head     int
-	elems    []int
-	finalErr error
-}
-
-func (c *stubCursor) Next() bool {
-	return c.head < len(c.elems)
-}
-
-func (c *stubCursor) Value() int {
-	head := c.head
-	c.head++
-	return c.elems[head]
-}
-
-func (c *stubCursor) Err() error {
-	return c.finalErr
-}
-
 func TestFrom(t *testing.T) {
 	pipe := pipefn.FromSeq(seqOf(1, 2, 3))
 
