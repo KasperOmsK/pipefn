@@ -1,9 +1,14 @@
 package pipefn
 
 import (
+	"errors"
 	"fmt"
 	"iter"
 	"sync"
+)
+
+var (
+	ErrAlreadyConsumed = errors.New("pipefn: pipe has already been consumed")
 )
 
 type (
@@ -22,8 +27,8 @@ type (
 	// Values, ForEach, Collect etc. Once consumed, a Pipe cannot be reused.
 	// Refer to each consuming method's documentation for details on their behavior.
 	Pipe[T any] struct {
+		*header
 		values Stream[T]
-		errors chan error
 	}
 
 	// PipeError represents an error that occured inside a pipeline
@@ -34,79 +39,39 @@ type (
 		Reason error
 	}
 
-	// Cursor provides pull-based iteration over a sequence of values.
-	//
-	// Next advances the cursor to the next value and reports whether one
-	// is available. When Next returns false, iteration has finished or an
-	// error has occurred.
-	//
-	// After Next returns true, Value returns the current value.
-	//
-	// Once iteration stops, Err reports any terminal error that occurred
-	// during iteration. If the sequence completed successfully, Err returns nil.
-	Cursor[T any] interface {
-		Next() bool
-		Value() T
-		Err() error
+	header struct {
+		used   bool
+		mu     sync.Mutex
+		errors chan error
 	}
 )
 
-// From creates a Pipe that produces values from the provided iter.Seq.
+// From creates a pipe that produces values from the provided stream.
 //
-// From panics if seq is nil.
-func From[T any](seq iter.Seq[T]) Pipe[T] {
-
-	if seq == nil {
-		panic("pipefn.From: nil seq")
+// The returned pipe will have the same terminal error as s, if any
+func From[T any](s Stream[T]) Pipe[T] {
+	if s == nil {
+		panic("pipefn.From: stream is nil")
 	}
 
-	p := Pipe[T]{
-		errors: make(chan error),
-		values: Stream[T]{},
+	return Pipe[T]{
+		header: &header{
+			errors: make(chan error),
+		},
+		values: s,
 	}
-
-	p.values.Seq = func(yield func(T) bool) {
-		defer close(p.errors)
-		for item := range seq {
-			if !yield(item) {
-				return
-			}
-		}
-	}
-
-	return p
 }
 
-// FromCursor creates a Pipe that yields values from the provided Cursor.
+// FromSeq creates a Pipe that produces values from the provided iter.Seq.
 //
-// The returned Pipe iterates over cursor using Next and forwards each value
-// returned by Value into the pipeline until the cursor is exhausted or the
-// consumer stops iteration early.
-//
-// Any terminal error reported by Cursor.Err is exposed through the pipe's value stream
-// Err method.
-func FromCursor[T any](cursor Cursor[T]) Pipe[T] {
-	if cursor == nil {
-		panic("FromCursor: cursor is nil")
+// FromSeq panics if seq is nil.
+func FromSeq[T any](seq iter.Seq[T]) Pipe[T] {
+	if seq == nil {
+		panic("pipefn.FromSeq: nil seq")
 	}
-
-	p := Pipe[T]{
-		errors: make(chan error),
-		values: Stream[T]{
-			errFunc: cursor.Err,
-		},
-	}
-
-	p.values.Seq = func(yield func(T) bool) {
-		defer close(p.errors)
-		for cursor.Next() {
-			if !yield(cursor.Value()) {
-				return
-			}
-		}
-	}
-
-	return p
+	return From(seqStream[T]{
+		seq: seq,
+	})
 }
 
 // FromSlice creates a Pipe that produces the elements of elems in order.
@@ -116,7 +81,7 @@ func FromCursor[T any](cursor Cursor[T]) Pipe[T] {
 //
 // If elems is nil, the resulting Pipe behaves as an empty pipe.
 func FromSlice[T any](elems []T) Pipe[T] {
-	return From(func(yield func(T) bool) {
+	return FromSeq(func(yield func(T) bool) {
 		for _, e := range elems {
 			if !yield(e) {
 				return
@@ -135,7 +100,7 @@ func FromSlice[T any](elems []T) Pipe[T] {
 // FromChan does not close the provided channel; channel lifecycle remains
 // the responsibility of the caller.
 func FromChan[T any](ch <-chan T) Pipe[T] {
-	return From(func(yield func(T) bool) {
+	return FromSeq(func(yield func(T) bool) {
 		for c := range ch {
 			if !yield(c) {
 				return
@@ -144,19 +109,17 @@ func FromChan[T any](ch <-chan T) Pipe[T] {
 	})
 }
 
-// Empty creates a Pipe that produces no values.
-//
-// The returned Pipe completes immediately when iterated and
-// yields no elements and no errors.
-func Empty[T any]() Pipe[T] {
-	return From(func(yield func(T) bool) {})
-}
-
 // Results returns a Stream that yields the values produced by p,
-// along with a channel that emits the errors produced by the p.
+// along with a channel that emits errors produced by the pipeline.
 //
-// Iterating over values.Seq consumes p. Once iteration begins,
-// p cannot be reused, restarted, or iterated again.
+// A Pipe can be consumed only once. After the first successful call to Results,
+// any subsequent call returns an empty Stream whose Err() returns ErrAlreadyConsumed,
+// along with a closed error channel.
+//
+// The errors channel contains only transformation errors produced by
+// pipeline stages (for example via TryMap). Terminal failures of the
+// underlying Stream are not sent through this channel and must instead
+// be checked via values.Err() after iteration completes.
 //
 // Callers must drain the errors channel. If errors are not consumed,
 // stages in the pipeline that attempt to emit errors may block.
@@ -182,18 +145,45 @@ func Empty[T any]() Pipe[T] {
 //	}()
 //
 //	// iterate over values
-//	for v := range values.Seq {
+//	for v := range values.Seq() {
 //	    process(v)
 //	}
 //
 //	if err := values.Err() != nil {
-//		// handle err (most likely rollback or discard the work done by process)
+//	    // handle terminal failure (e.g. rollback or discard processed work)
 //	}
 //
 //	wg.Wait()
-//	// at this point, both values and errs have been fully consumed.
-func (p Pipe[T]) Results() (values Stream[T], errors <-chan error) {
-	return p.values, p.errors
+func (p *Pipe[T]) Results() (Stream[T], <-chan error) {
+	if p.header == nil {
+		errCh := make(chan error)
+		close(errCh)
+		return emptyStream[T](), errCh
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	// if used, return a empty and "closed" stream
+	if p.used {
+		errCh := make(chan error)
+		close(errCh)
+		out := errorStream[T](ErrAlreadyConsumed)
+		return out, errCh
+	}
+
+	p.used = true
+	return seqStream[T]{
+		seq: func(yield func(T) bool) {
+			defer close(p.errors)
+			for e := range p.values.Seq() {
+				if !yield(e) {
+					return
+				}
+			}
+		},
+		errFunc: p.values.Err,
+	}, p.errors
 }
 
 // Values returns the sequence of values produced by p.
@@ -244,7 +234,7 @@ func (p Pipe[T]) ForEach(consumeFn func(item T), errorFn func(err error)) error 
 			errorFn(err)
 		}
 	}()
-	for i := range values.Seq {
+	for i := range values.Seq() {
 		consumeFn(i)
 	}
 	errorWg.Wait()
@@ -282,18 +272,23 @@ func (p Pipe[T]) Collect() ([]T, []error, error) {
 // Tap panics if tapFn is nil.
 func (p *Pipe[T]) Tap(tapFn func(T)) {
 
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	if tapFn == nil {
 		panic("Pipe.Tap: tapFn cannot be nil")
 	}
 
-	originalIt := p.values.Seq
-	p.values.Seq = func(yield func(T) bool) {
-		for i := range originalIt {
-			tapFn(i)
-			if !yield(i) {
-				return
+	originalIt := p.values.Seq()
+	p.values = seqStream[T]{
+		seq: func(yield func(T) bool) {
+			for i := range originalIt {
+				tapFn(i)
+				if !yield(i) {
+					return
+				}
 			}
-		}
+		},
 	}
 }
 

@@ -1,6 +1,6 @@
 /*
 Package pipefn provides functional-style and composable transformations
-for iter.Seq, enabling streaming pipelines without intermediate buffering.
+for data streams, enabling streaming pipelines without intermediate buffering.
 
 This package is built around the concept of Pipes, a Pipe[T] represents
 a lazily-evaluated stream of values of type T paired with an internal error channel.
@@ -8,7 +8,7 @@ a lazily-evaluated stream of values of type T paired with an internal error chan
 All transformations (Map, FlatMap, Filter, and more) are provided as
 package-level functions. Each transformation returns a new Pipe, allowing
 pipelines to be composed through simple chaining. Values are only produced
-when the resulting iter.Seq is iterated, making all pipelines demand-driven.
+when the resulting stream is iterated, making all pipelines demand-driven.
 
 Errors produced by any stage flow through the pipe’s internal error channel.
 All transformations inherit their input Pipe’s error channel,

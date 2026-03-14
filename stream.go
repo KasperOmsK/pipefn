@@ -1,26 +1,65 @@
 package pipefn
 
-import "iter"
+import (
+	"iter"
+)
 
-// Stream wraps an iter.Seq whose iteration may terminate with an error.
+// Stream represents a generic data stream.
 //
-// The sequence of values is provided by the Seq field. After the
-// sequence has been fully consumed, Err reports any terminal error that
-// occurred during iteration. If iteration completed successfully, Err
-// returns nil.
+// A Stream produces a sequence of values of type T and may terminate with an
+// error. Consumers iterate over the values using the Seq method and must check
+// Err after iteration completes to determine whether the stream ended normally
+// or due to an error.
 //
-// Err should be checked after the sequence has been exhausted.
-type Stream[T any] struct {
-	iter.Seq[T]
+// Typical usage:
+//
+//	s := getStream()
+//	for v := range s.Seq() {
+//	    // process v
+//	}
+//	if err := s.Err(); err != nil {
+//	    // handle stream error
+//	}
+//
+// The sequence returned by Seq should be consumed before calling Err to ensure
+// that the stream has fully completed.
+type Stream[T any] interface {
+	// Seq returns the iterator that yields elements of the stream.
+	Seq() iter.Seq[T]
+
+	// Err returns the terminal error encountered while producing the stream.
+	// It returns nil if the stream completed successfully. Err should be
+	// checked only after the sequence returned by Seq has been fully consumed.
+	Err() error
+}
+
+type seqStream[T any] struct {
+	seq     iter.Seq[T]
 	errFunc func() error
 }
 
-// Err returns any failure encountered during iteration.
-//
-// If iteration completed without error, Err() returns nil.
-func (s Stream[T]) Err() error {
-	if s.errFunc != nil {
-		return s.errFunc()
+func (ss seqStream[T]) Seq() iter.Seq[T] {
+	return ss.seq
+}
+
+func (ss seqStream[T]) Err() error {
+	if ss.errFunc != nil {
+		return ss.errFunc()
 	}
 	return nil
+}
+
+func errorStream[T any](eofErr error) Stream[T] {
+	return seqStream[T]{
+		seq: func(yield func(T) bool) {},
+		errFunc: func() error {
+			return eofErr
+		},
+	}
+}
+
+func emptyStream[T any]() Stream[T] {
+	return seqStream[T]{
+		seq: func(yield func(T) bool) {},
+	}
 }
