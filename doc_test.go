@@ -18,18 +18,50 @@ type Event struct {
 	Items []Item
 }
 
-// Example demonstrates a relatively complex pipeline that parses items from (fake) event files
+// Example demonstrates a relatively complex pipeline that parses items from multiple sources
 func Example() {
-	// Wrap iter.Seqs into Pipes
-	input1 := pipefn.FromSeq(IterateFile("events-2023.log"))
-	input2 := pipefn.FromSeq(IterateFile("events-2024.log"))
+
+	var (
+		// stream is a fake stream that will yield some data but then report
+		// a terminal failure.
+		stream pipefn.Stream[string] = newStubStream([]string{
+			"purchase:9999",
+		}, fmt.Errorf("fake error"))
+	)
+
+	// Create a pipe from a slice
+	inputsFromSlice := pipefn.FromSlice([]string{
+		"purchase:1001,1002,1003",
+		"refund:2001",
+		"purchase:1004,1005",
+		"purchase:", // invalid item (empty ID)
+	})
+
+	// ... or from an iter.Seq
+	inputsFromSeq := pipefn.FromSeq(func(yield func(string) bool) {
+		yield("refund:420")
+	})
+
+	// ... or from a channel
+	ch := make(chan string)
+	go func() {
+		ch <- ":1000" // invalid item (no event type)
+		ch <- "refund:1,2,3"
+		close(ch)
+	}()
+	inputsFromChan := pipefn.FromChan(ch)
+
+	// ... or from the Stream interface
+	inputsFromStream := pipefn.From(stream)
 
 	// Merge multiple pipes of the same type.
-	p := pipefn.Merge(input1, input2)
+	//
+	// if any input pipe fails, the merged pipe will also fail with the first encountered failure.
+	allInputs := pipefn.Merge(inputsFromSeq, inputsFromSlice, inputsFromStream, inputsFromChan)
 
 	// Map applies deterministic transformations that cannot fail.
 	// Transformations are simple functions, making it easy to reuse existing code.
-	trimmed := pipefn.Map(p, strings.TrimSpace)
+	trimmed := pipefn.Map(allInputs, strings.TrimSpace)
 
 	// TryMap applies transformations that may fail.
 	// Errors are forwarded to the Pipe's error channel.
@@ -89,18 +121,15 @@ func Example() {
 
 	// values.Err() returns any terminal failure of the pipe.
 	//
-	// A non-nil error here indicates that the pipeline as a whole failed,
-	// regardless of any items that were successfully processed.
+	// A non-nil error here indicates that at least one input stream failed.
 	//
-	// In this example, such an error means the work done by ProcessBatch
-	// should be discarded, so we call Rollback(). Otherwise, if no terminal
-	// failure occurred, we can safely commit the processed batches.
+	// In our example, let's say that such an error means the work done by ProcessBatch
+	// should be discarded,
 	if err := values.Err(); err != nil {
 		Rollback()
 	} else {
 		Commit()
 	}
-
 }
 
 func Rollback() {
@@ -109,36 +138,6 @@ func Rollback() {
 
 func Commit() {
 	fmt.Println("work commited !")
-}
-
-func IterateFile(path string) iter.Seq[string] {
-	return func(yield func(string) bool) {
-		var lines []string
-
-		switch path {
-		case "events-2023.log":
-			lines = []string{
-				"purchase:1001,1002,1003",
-				"refund:2001",
-				"purchase:1004,1005",
-				"purchase:", // invalid item (empty ID)
-			}
-		case "events-2024.log":
-			lines = []string{
-				"purchase:3001,3002",
-				"invalid-line-without-colon",
-				"purchase:3003",
-			}
-		default:
-			lines = []string{}
-		}
-
-		for _, line := range lines {
-			if !yield(line) {
-				return
-			}
-		}
-	}
 }
 
 func ParseEvent(line string) (Event, error) {
@@ -172,4 +171,31 @@ func ProcessBatch(items []Item) error {
 		fmt.Println(it)
 	}
 	return nil
+}
+
+// newStubStream returns a pipefn.Stream that simulates reading from a file with a terminal failure
+func newStubStream(data []string, err error) pipefn.Stream[string] {
+	return &stubStream{
+		stubData: func(yield func(string) bool) {
+			for _, e := range data {
+				if !yield(e) {
+					return
+				}
+			}
+		},
+		failure: err,
+	}
+}
+
+type stubStream struct {
+	stubData iter.Seq[string]
+	failure  error
+}
+
+func (fs *stubStream) Seq() iter.Seq[string] {
+	return fs.stubData
+}
+
+func (fs *stubStream) Err() error {
+	return fs.failure
 }
