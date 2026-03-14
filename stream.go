@@ -57,9 +57,3 @@ func errorStream[T any](eofErr error) Stream[T] {
 		},
 	}
 }
-
-func emptyStream[T any]() Stream[T] {
-	return seqStream[T]{
-		seq: func(yield func(T) bool) {},
-	}
-}

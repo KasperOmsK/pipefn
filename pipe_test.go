@@ -35,7 +35,7 @@ func TestFromSeq_PanicsIfNilSeq(t *testing.T) {
 }
 
 func TestPipe_ZeroValuePipeUsable(t *testing.T) {
-	pipe := pipefn.Pipe[int]{}
+	zeroPipe := pipefn.Pipe[int]{}
 
 	var (
 		values []int
@@ -43,12 +43,16 @@ func TestPipe_ZeroValuePipeUsable(t *testing.T) {
 		err    error
 	)
 	require.NotPanics(t, func() {
-		values, errs, err = collect(pipe)
+		values, errs, err = collect(zeroPipe)
 	})
 
 	require.Empty(t, values)
 	require.Empty(t, errs)
 	require.NoError(t, err)
+
+	require.NotPanics(t, func() {
+		pipefn.Map(zeroPipe, func(in int) int { return in })
+	})
 }
 
 func TestPipe_MultipleResultsReturnsErrorStream(t *testing.T) {

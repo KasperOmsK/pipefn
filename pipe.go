@@ -154,11 +154,10 @@ func FromChan[T any](ch <-chan T) Pipe[T] {
 //	}
 //
 //	wg.Wait()
-func (p *Pipe[T]) Results() (Stream[T], <-chan error) {
+func (p Pipe[T]) Results() (Stream[T], <-chan error) {
 	if p.header == nil {
-		errCh := make(chan error)
-		close(errCh)
-		return emptyStream[T](), errCh
+		empty := emptyPipe[T]()
+		return empty.Results()
 	}
 
 	p.mu.Lock()
@@ -294,4 +293,8 @@ func (p *Pipe[T]) Tap(tapFn func(T)) {
 
 func (pe *PipeError) Error() string {
 	return fmt.Sprintf("%+v: %s", pe.Item, pe.Reason)
+}
+
+func emptyPipe[T any]() Pipe[T] {
+	return FromSlice([]T{})
 }

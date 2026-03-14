@@ -29,6 +29,10 @@ func makeChildPipe[In, Out any](
 	parent Pipe[In],
 	transform func(input iter.Seq[In], errs chan<- error) iter.Seq[Out]) Pipe[Out] {
 
+	if parent.header == nil {
+		return emptyPipe[Out]()
+	}
+
 	parentValues := parent.values.Seq()
 	parentFinalErr := parent.values.Err
 
