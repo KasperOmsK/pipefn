@@ -1,11 +1,13 @@
 package pipefn_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"iter"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/KasperOmsK/pipefn"
 
@@ -149,18 +151,26 @@ func TestMerge(t *testing.T) {
 	require.Empty(t, errs)
 }
 
-type failingCursor struct{}
+func TestMerge_BreakEarly(t *testing.T) {
+	p := pipefn.FromSlice([]int{1, 2, 3})
+	p2 := pipefn.FromSlice([]int{4, 5, 6})
 
-func (fc *failingCursor) Next() bool {
-	return false
-}
+	merged := pipefn.Merge(p, p2)
 
-func (fc *failingCursor) Value() int {
-	return 0
-}
+	done := make(chan struct{})
+	values, errors := merged.Results()
 
-func (fc *failingCursor) Err() error {
-	return fmt.Errorf("cursor error")
+	go func() {
+		for range errors {
+		}
+		close(done)
+	}()
+
+	for range values.Seq() {
+		break
+	}
+
+	<-done
 }
 
 func TestMerge_ForwardsErrors(t *testing.T) {
@@ -197,37 +207,44 @@ func TestMerge_ForwardsErrors(t *testing.T) {
 	require.Contains(t, errorMsgs, "pipe2 error")
 }
 
-// TODO: reimplement TestMerge_Abort_Early
-//func TestMerge_Abort_Early(t *testing.T) {
-//
-//	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
-//	defer cancel()
-//
-//	p1 := pipefn.FromSeq(func(yield func(int) bool) {
-//		for {
-//			if !yield(1) {
-//				return
-//			}
-//		}
-//	})
-//	p2 := pipefn.FromCursor(&failingCursor{})
-//
-//	exited := make(chan struct{})
-//	go func() {
-//		merged := pipefn.Merge(p1, p2)
-//		_, errs, err := collect(merged)
-//		require.Error(t, err)
-//		require.Empty(t, errs)
-//		close(exited)
-//	}()
-//
-//	select {
-//	case <-ctx.Done():
-//		t.Errorf("merge did not abort in a timely manner")
-//	case <-exited:
-//	}
-//
-//}
+func TestMerge_AbortEarly(t *testing.T) {
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+	defer cancel()
+
+	p1 := pipefn.FromSeq(func(yield func(int) bool) {
+		for {
+			time.Sleep(time.Millisecond * 10)
+			if !yield(1) {
+				return
+			}
+		}
+	})
+	p2 := pipefn.From(errorStream[int](fmt.Errorf("stream error")))
+
+	exited := make(chan struct{})
+	go func() {
+		merged := pipefn.Merge(p1, p2)
+		_, errs, err := collect(merged)
+		require.Error(t, err)
+		require.Empty(t, errs)
+		close(exited)
+	}()
+
+	select {
+	case <-ctx.Done():
+		t.Errorf("merge did not abort in a timely manner")
+	case <-exited:
+	}
+
+}
+
+func TestMerge_SameLineage(t *testing.T) {
+	p := pipefn.FromSlice([]int{1, 2, 3})
+	p2 := pipefn.Map(p, func(in int) int { return 2 * in })
+	_, _, err := collect(pipefn.Merge(p, p2))
+	require.ErrorIs(t, err, pipefn.ErrAlreadyConsumed)
+}
 
 func TestFlatTryMap(t *testing.T) {
 	// tests that FlatTryMap behaves identically to Flatten(TryMap)
@@ -407,6 +424,34 @@ func TestGroupByAggregate_PreservesErrors(t *testing.T) {
 	require.EqualError(t, toPipelineError(errs[0]).Reason, "bad value 2")
 }
 
+type seqStream[T any] struct {
+	seq     iter.Seq[T]
+	errFunc func() error
+}
+
+func (ss seqStream[T]) Seq() iter.Seq[T] {
+	if ss.seq == nil {
+		return func(yield func(T) bool) {}
+	}
+	return ss.seq
+}
+
+func (ss seqStream[T]) Err() error {
+	if ss.errFunc != nil {
+		return ss.errFunc()
+	}
+	return nil
+}
+
+func errorStream[T any](eofErr error) pipefn.Stream[T] {
+	return seqStream[T]{
+		seq: func(yield func(T) bool) {},
+		errFunc: func() error {
+			return eofErr
+		},
+	}
+}
+
 func toPipelineError(err error) *pipefn.PipeError {
 	return err.(*pipefn.PipeError)
 }
@@ -420,6 +465,7 @@ func seqOf[T any](values ...T) iter.Seq[T] {
 		}
 	}
 }
+
 func collect[T any](p pipefn.Pipe[T]) ([]T, []error, error) {
 	values, errors := p.Results()
 

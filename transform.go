@@ -14,7 +14,7 @@ type (
 
 	// TryMapFunc is a mapping function that may return an error.
 	//
-	// Errors are forwarded to the Pipe's error channel while
+	// Errors are added to the Pipe's error channel while
 	// successful values continue through the pipeline.
 	TryMapFunc[In, Out any] func(in In) (Out, error)
 
@@ -23,6 +23,8 @@ type (
 	Predicate[T any] func(item T) bool
 )
 
+// TODO: consider making makeChildPipe public as a "low-level" primitive.
+// This would allow users to make their own arbitrary transformations.
 func makeChildPipe[In, Out any](
 	parent Pipe[In],
 	transform func(input iter.Seq[In], errs chan<- error) iter.Seq[Out]) Pipe[Out] {
@@ -40,10 +42,10 @@ func makeChildPipe[In, Out any](
 	return out
 }
 
-// Map transforms each input value using fn and returns a new Pipe producing
-// the mapped values.
+// Map returns a Pipe that applies fn to each value produced by p.
 //
-// Errors from the input Pipe are preserved.
+// Upstream transformation errors and terminal failures from the
+// underlying Stream are propagated unchanged.
 func Map[In, Out any](p Pipe[In], fn MapFunc[In, Out]) Pipe[Out] {
 	return makeChildPipe(p, func(input iter.Seq[In], errs chan<- error) iter.Seq[Out] {
 		return func(yield func(Out) bool) {
@@ -61,15 +63,19 @@ func Map[In, Out any](p Pipe[In], fn MapFunc[In, Out]) Pipe[Out] {
 //
 // FlatMap is equivalent to calling Flatten(Map(p, fn)).
 //
-// Errors from the input Pipe are preserved.
+// Transformation errors and terminal failures from the input pipe are propagated unchanged.
 func FlatMap[In, Out any](p Pipe[In], fn MapFunc[In, []Out]) Pipe[Out] {
 	return Flatten(Map(p, fn))
 }
 
-// TryMap transforms each input value using fn, forwarding any non-nil
-// errors onto the Pipe's error channel and yielding only successful results.
+// TryMap applies fn to each value produced by p and returns a new Pipe
+// emitting the successful results.
 //
-// Errors from the input Pipe are preserved.
+// If fn returns a non-nil error, the error is wrapped in a *PipeError and
+// sent to the Pipe's error channel, and the corresponding value is skipped.
+//
+// Transformation errors produced by TryMap are added to the input pipe's
+// error channel. Any terminal failure from the input pipe is propagated unchanged.
 func TryMap[In, Out any](p Pipe[In], fn TryMapFunc[In, Out]) Pipe[Out] {
 	return makeChildPipe(p, func(input iter.Seq[In], errs chan<- error) iter.Seq[Out] {
 		return func(yield func(Out) bool) {
@@ -90,14 +96,19 @@ func TryMap[In, Out any](p Pipe[In], fn TryMapFunc[In, Out]) Pipe[Out] {
 	})
 }
 
-// FlatTryMap transforms each input value using fn and returns a Pipe producing
-// the flattened output values.
+// FlatTryMap applies fn to each value produced by p and returns a new Pipe
+// emitting the flattened successful results.
 //
-// Any non-nil error returned by fn is forwarded to the Pipe’s error channel.
+// If fn returns a non-nil error, the error is wrapped in a *PipeError and
+// sent to the Pipe's error channel, and the corresponding value is skipped.
+//
+// Each successful result slice returned by fn is flattened, and its elements
+// are emitted individually by the returned Pipe.
+//
+// Transformation errors produced by FlatTryMap are added to the input pipe's
+// error channel. Any terminal failure from the input pipe is propagated unchanged.
 //
 // FlatTryMap is equivalent to calling Flatten(TryMap(p, fn)).
-//
-// Errors from the input Pipe are preserved.
 func FlatTryMap[In, Out any](p Pipe[In], fn TryMapFunc[In, []Out]) Pipe[Out] {
 	return Flatten(TryMap(p, fn))
 }
@@ -105,7 +116,7 @@ func FlatTryMap[In, Out any](p Pipe[In], fn TryMapFunc[In, []Out]) Pipe[Out] {
 // Filter returns a Pipe that yields only the values for which predicate
 // returns true.
 //
-// Errors from the input Pipe are preserved.
+// Transformation errors and terminal failures from the input pipe are propagated unchanged.
 func Filter[T any](p Pipe[T], predicate Predicate[T]) Pipe[T] {
 	return makeChildPipe(p, func(input iter.Seq[T], errs chan<- error) iter.Seq[T] {
 		return func(yield func(T) bool) {
@@ -123,7 +134,7 @@ func Filter[T any](p Pipe[T], predicate Predicate[T]) Pipe[T] {
 // Flatten converts a Pipe of slices into a Pipe of their elements,
 // emitting the items of each slice in order.
 //
-// Errors from the input Pipe are preserved.
+// Transformation errors and terminal failures from the input pipe are propagated unchanged.
 func Flatten[T any](p Pipe[[]T]) Pipe[T] {
 	return makeChildPipe(p, func(input iter.Seq[[]T], errs chan<- error) iter.Seq[T] {
 		return func(yield func(T) bool) {
@@ -144,7 +155,7 @@ func Flatten[T any](p Pipe[[]T]) Pipe[T] {
 //
 // Chunk panics if chunkSize is not positive.
 //
-// Errors from the input Pipe are preserved.
+// Transformation errors and terminal failures from the input pipe are propagated unchanged.
 func Chunk[T any](p Pipe[T], chunkSize int) Pipe[[]T] {
 	if chunkSize <= 0 {
 		panic("pipeline.Chunk: chunkSize must be positive")
@@ -220,7 +231,7 @@ func Chunk[T any](p Pipe[T], chunkSize int) Pipe[[]T] {
 //
 //	[A, A], [B, B], [A]
 //
-// Errors from the input Pipe are preserved.
+// Transformation errors and terminal failures from the input pipe are propagated unchanged.
 func GroupBy[T any, K comparable](p Pipe[T], keyFunc func(T) K) Pipe[[]T] {
 	return makeChildPipe(p, func(input iter.Seq[T], errs chan<- error) iter.Seq[[]T] {
 		return func(yield func([]T) bool) {
@@ -281,7 +292,7 @@ func GroupBy[T any, K comparable](p Pipe[T], keyFunc func(T) K) Pipe[[]T] {
 //
 //	[A1, A2], [B1, B2], [A3]
 //
-// Errors from the input Pipe are preserved.
+// Transformation errors and terminal failures from the input pipe are propagated unchanged.
 func GroupByAggregate[In any, K comparable, Out any](
 	p Pipe[In],
 	keyFunc func(In) K,
@@ -320,14 +331,17 @@ func GroupByAggregate[In any, K comparable, Out any](
 	})
 }
 
-// Merge combines multiple pipes into a single pipe that yields all values
-// and errors produced by the input pipes.
+// Merge combines multiple pipes into a single Pipe that emits all values
+// and pipeline errors produced by the input pipes.
 //
-// Values and errors emitted by different pipes may appear in any order.
+// Values and errors originating from different pipes may be interleaved
+// and are not guaranteed to preserve the relative ordering between pipes.
 //
-// Terminal pipeline failure is reported through the merged pipe's value
-// stream. After the stream has been fully consumed, Stream.Err() returns
-// the first terminal error encountered among the merged streams.
+// If pipes is empty, Merge returns an empty pipe.
+//
+// Terminal failures are reported through the merged value stream. After the
+// stream has been fully consumed, Stream.Err() returns the first terminal
+// error encountered among the merged streams, if any.
 //
 // Example:
 //
@@ -338,21 +352,21 @@ func GroupByAggregate[In any, K comparable, Out any](
 //	// drain pipeline errors
 //	go func() {
 //		for err := range errs {
-//	        	log.Printf("pipeline error: %v", err)
-//	    	}
+//			log.Printf("pipeline error: %v", err)
+//		}
 //	}()
 //
-//	for v := range values.Seq {
+//	for v := range values.Seq() {
 //		process(v)
 //	}
 //
-//	// if non nil, values.Err() reports the first terminal failure encountered
+//	// if non-nil, values.Err() reports the first terminal failure encountered
 //	if err := values.Err(); err != nil {
 //		// handle terminal failure
 //	}
 func Merge[T any](pipes ...Pipe[T]) Pipe[T] {
 	if len(pipes) == 0 {
-		return FromSlice([]T{})
+		return Pipe[T]{}
 	}
 
 	if len(pipes) == 1 {
@@ -376,7 +390,7 @@ func Merge[T any](pipes ...Pipe[T]) Pipe[T] {
 	//	p1 := somePipe()
 	//	p2 := someOtherPipe()
 	//	merged := pipefn.Merge(p1, p2)
-	//	mergedBis := pipefn.Merge(merged, p1, p2) <== The current implementation wont catch this.
+	//	mergedBis := pipefn.Merge(merged, p1, p2) <== The suggested implementation wont catch this.
 	for _, p := range pipes {
 		values, errs := p.Results()
 		allStreams = append(allStreams, values)
@@ -407,7 +421,7 @@ func Merge[T any](pipes ...Pipe[T]) Pipe[T] {
 				// wait for the signal that mergedErrors can be closed before stopping the Seq.
 				// we do it this way because the contract is:
 				//
-				//	all errors on pipe.header.errors *must* be sent while the Seq context is valid
+				//	all errors on pipe.header.errors *must* be sent before the Seq returns.
 				//
 				<-errDone
 			},

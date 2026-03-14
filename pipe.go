@@ -1,10 +1,14 @@
 package pipefn
 
 import (
+	"errors"
 	"fmt"
 	"iter"
 	"sync"
-	"sync/atomic"
+)
+
+var (
+	ErrAlreadyConsumed = errors.New("pipefn: pipe has already been consumed")
 )
 
 type (
@@ -36,12 +40,15 @@ type (
 	}
 
 	header struct {
-		used   atomic.Bool
+		used   bool
 		mu     sync.Mutex
 		errors chan error
 	}
 )
 
+// From creates a pipe that produces values from the provided stream.
+//
+// The returned pipe will have the same terminal error as s, if any
 func From[T any](s Stream[T]) Pipe[T] {
 	if s == nil {
 		panic("pipefn.From: stream is nil")
@@ -62,7 +69,7 @@ func FromSeq[T any](seq iter.Seq[T]) Pipe[T] {
 	if seq == nil {
 		panic("pipefn.FromSeq: nil seq")
 	}
-	return From(&seqStream[T]{
+	return From(seqStream[T]{
 		seq: seq,
 	})
 }
@@ -102,19 +109,17 @@ func FromChan[T any](ch <-chan T) Pipe[T] {
 	})
 }
 
-// Empty creates a Pipe that produces no values.
-//
-// The returned Pipe completes immediately when iterated and
-// yields no elements and no errors.
-func Empty[T any]() Pipe[T] {
-	return FromSeq(func(yield func(T) bool) {})
-}
-
 // Results returns a Stream that yields the values produced by p,
-// along with a channel that emits the errors produced by the p.
+// along with a channel that emits errors produced by the pipeline.
 //
-// Iterating over values.Seq consumes p. Once iteration begins,
-// p cannot be reused, restarted, or iterated again.
+// A Pipe can be consumed only once. After the first successful call to Results,
+// any subsequent call returns an empty Stream whose Err() returns ErrAlreadyConsumed,
+// along with a closed error channel.
+//
+// The errors channel contains only transformation errors produced by
+// pipeline stages (for example via TryMap). Terminal failures of the
+// underlying Stream are not sent through this channel and must instead
+// be checked via values.Err() after iteration completes.
 //
 // Callers must drain the errors channel. If errors are not consumed,
 // stages in the pipeline that attempt to emit errors may block.
@@ -140,29 +145,34 @@ func Empty[T any]() Pipe[T] {
 //	}()
 //
 //	// iterate over values
-//	for v := range values.Seq {
+//	for v := range values.Seq() {
 //	    process(v)
 //	}
 //
 //	if err := values.Err() != nil {
-//		// handle err (most likely rollback or discard the work done by process)
+//	    // handle terminal failure (e.g. rollback or discard processed work)
 //	}
 //
 //	wg.Wait()
-//	// at this point, both values and errs have been fully consumed.
-func (p Pipe[T]) Results() (Stream[T], <-chan error) {
+func (p *Pipe[T]) Results() (Stream[T], <-chan error) {
+	if p.header == nil {
+		errCh := make(chan error)
+		close(errCh)
+		return emptyStream[T](), errCh
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// TODO: make the zero value of a pipe behave as an empty pipe
-
 	// if used, return a empty and "closed" stream
-	if !p.used.CompareAndSwap(false, true) {
+	if p.used {
 		errCh := make(chan error)
 		close(errCh)
-		return errorStream[T](fmt.Errorf("pipefn: pipe already consumed")), errCh
+		out := errorStream[T](ErrAlreadyConsumed)
+		return out, errCh
 	}
 
+	p.used = true
 	return seqStream[T]{
 		seq: func(yield func(T) bool) {
 			defer close(p.errors)
@@ -270,7 +280,7 @@ func (p *Pipe[T]) Tap(tapFn func(T)) {
 	}
 
 	originalIt := p.values.Seq()
-	p.values = &seqStream[T]{
+	p.values = seqStream[T]{
 		seq: func(yield func(T) bool) {
 			for i := range originalIt {
 				tapFn(i)
