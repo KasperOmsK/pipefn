@@ -26,6 +26,8 @@ type (
 	// A Pipe is consumed when its Stream[T] is iterated, typically through Results,
 	// Values, ForEach, Collect etc. Once consumed, a Pipe cannot be reused.
 	// Refer to each consuming method's documentation for details on their behavior.
+	//
+	// The zero Pipe is an empty pipe that yields no value and no error.
 	Pipe[T any] struct {
 		*header
 		values Stream[T]
