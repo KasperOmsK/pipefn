@@ -11,15 +11,20 @@ import (
 )
 
 func TestFrom(t *testing.T) {
-	// TODO: test that all FromXXX behave identically
-	pipe := pipefn.FromSeq(seqOf(1, 2, 3))
+	pipe := pipefn.From(&seqStream[int]{
+		seq: func(yield func(int) bool) {
+			for i := range 4 {
+				if !yield(i) {
+					return
+				}
+			}
+		},
+	})
 
-	var out []int
-	for v := range pipe.Values().Seq() {
-		out = append(out, v)
-	}
-
-	require.Equal(t, out, []int{1, 2, 3})
+	values, errs, err := collect(pipe)
+	require.Equal(t, []int{0, 1, 2, 3}, values)
+	require.Empty(t, errs)
+	require.NoError(t, err)
 }
 
 func TestFrom_PanicsIfNilStream(t *testing.T) {
@@ -28,10 +33,52 @@ func TestFrom_PanicsIfNilStream(t *testing.T) {
 	})
 }
 
+func TestFromSeq(t *testing.T) {
+	pipe := pipefn.FromSeq(seqOf(0, 1, 2, 3))
+
+	values, errs, err := collect(pipe)
+
+	require.Equal(t, []int{0, 1, 2, 3}, values)
+	require.Empty(t, errs)
+	require.NoError(t, err)
+}
+
 func TestFromSeq_PanicsIfNilSeq(t *testing.T) {
 	require.Panics(t, func() {
 		pipefn.FromSeq[int](nil)
 	})
+}
+
+func TestFromSlice(t *testing.T) {
+	data := []int{0, 1, 2, 3}
+	pipe := pipefn.FromSlice(data)
+
+	values, errs, err := collect(pipe)
+	require.Equal(t, data, values)
+	require.Empty(t, errs)
+	require.NoError(t, err)
+}
+
+func TestFromSlice_Empty(t *testing.T) {
+	pipe := pipefn.FromSlice[int](nil)
+	requireEmpty(t, pipe)
+}
+
+func TestFromChan(t *testing.T) {
+	ch := make(chan int)
+	go func() {
+		for i := range 4 {
+			ch <- i
+		}
+		close(ch)
+	}()
+
+	pipe := pipefn.FromChan(ch)
+
+	values, errs, err := collect(pipe)
+	require.Equal(t, []int{0, 1, 2, 3}, values)
+	require.Empty(t, errs)
+	require.NoError(t, err)
 }
 
 func TestPipe_ZeroValuePipeUsable(t *testing.T) {
