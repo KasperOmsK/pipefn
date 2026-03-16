@@ -229,3 +229,25 @@ func ExampleMerge() {
 	// 4
 	// 5
 }
+
+func ExampleConcat() {
+	p1 := pipefn.FromSlice([]int{1, 2})
+	p2 := pipefn.FromSlice([]int{3})
+	p3 := pipefn.FromSlice([]int{4, 5})
+
+	concat := pipefn.Concat(p1, p2, p3)
+
+	values, _, _ := concat.Collect()
+
+	// Print concatenated values
+	for _, v := range values {
+		fmt.Println(v)
+	}
+
+	// Output:
+	// 1
+	// 2
+	// 3
+	// 4
+	// 5
+}

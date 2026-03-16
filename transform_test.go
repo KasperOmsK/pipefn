@@ -246,6 +246,11 @@ func TestMerge_SameLineage(t *testing.T) {
 	require.ErrorIs(t, err, pipefn.ErrAlreadyConsumed)
 }
 
+func TestMerge_NoInput(t *testing.T) {
+	p := pipefn.Merge[int]()
+	requireEmpty(t, p)
+}
+
 func TestFlatTryMap(t *testing.T) {
 	// tests that FlatTryMap behaves identically to Flatten(TryMap)
 
@@ -318,6 +323,12 @@ func TestGroupBy(t *testing.T) {
 	require.Equal(t, expected, vals)
 }
 
+func TestGroupBy_EmptyInput(t *testing.T) {
+	input := pipefn.Pipe[string]{}
+	grouped := pipefn.GroupBy(input, func(t string) string { return t })
+	requireEmpty(t, grouped)
+}
+
 func TestGroupBy_ForwardsErrors(t *testing.T) {
 	// Input values with a TryMap stage to inject errors
 	input := pipefn.FromSeq(seqOf(1, 1, 2, 2, 3))
@@ -385,10 +396,7 @@ func TestGroupByAggregate_EmptyInput(t *testing.T) {
 		func(first Record) int { return 0 },
 		func(acc *int, r Record) { *acc += r.Value })
 
-	vals, errs, err := collect(aggregated)
-	require.NoError(t, err)
-	require.Empty(t, vals)
-	require.Empty(t, errs)
+	requireEmpty(t, aggregated)
 }
 
 func TestGroupByAggregate_PreservesErrors(t *testing.T) {
@@ -422,6 +430,111 @@ func TestGroupByAggregate_PreservesErrors(t *testing.T) {
 	// The error for Value=2 is preserved
 	require.Len(t, errs, 1)
 	require.EqualError(t, toPipelineError(errs[0]).Reason, "bad value 2")
+}
+
+func TestConcat(t *testing.T) {
+	t.Run("concatenates values in order", func(t *testing.T) {
+		p1 := pipefn.FromSlice([]int{1, 2})
+		p2 := pipefn.FromSlice([]int{3, 4})
+
+		values, errs, failure := collect(pipefn.Concat(p1, p2))
+
+		require.Equal(t, []int{1, 2, 3, 4}, values)
+		require.Empty(t, errs)
+		require.NoError(t, failure)
+	})
+
+	t.Run("handles empty pipe in sequence", func(t *testing.T) {
+		p1 := pipefn.FromSlice([]int{1, 2})
+		p2 := pipefn.FromSlice([]int(nil))
+		p3 := pipefn.FromSlice([]int{3})
+
+		values, errs, failure := collect(pipefn.Concat(p1, p2, p3))
+
+		require.Equal(t, []int{1, 2, 3}, values)
+		require.Empty(t, errs)
+		require.NoError(t, failure)
+	})
+
+	t.Run("all pipes empty", func(t *testing.T) {
+		p1 := pipefn.FromSlice([]int(nil))
+		p2 := pipefn.FromSlice([]int(nil))
+
+		values, errs, failure := collect(pipefn.Concat(p1, p2))
+
+		require.Empty(t, values)
+		require.Empty(t, errs)
+		require.NoError(t, failure)
+	})
+
+	t.Run("zero pipes", func(t *testing.T) {
+		values, errs, failure := collect(pipefn.Concat[int]())
+
+		require.Empty(t, values)
+		require.Empty(t, errs)
+		require.NoError(t, failure)
+	})
+
+	t.Run("with errors", func(t *testing.T) {
+		mapErr := errors.New("map failure")
+
+		p1 := pipefn.TryMap(
+			pipefn.FromSlice([]int{1, 2, 3}),
+			func(v int) (int, error) {
+				if v == 2 {
+					return 0, mapErr
+				}
+				return v, nil
+			},
+		)
+
+		p2 := pipefn.TryMap(
+			pipefn.FromSlice([]int{4, 5}),
+			func(v int) (int, error) {
+				if v == 5 {
+					return 0, mapErr
+				}
+				return v, nil
+			},
+		)
+
+		values, errs, failure := collect(pipefn.Concat(p1, p2))
+
+		require.Equal(t, []int{1, 3, 4}, values)
+		require.Len(t, errs, 2)
+		require.NoError(t, failure)
+	})
+
+	t.Run("with terminal failure", func(t *testing.T) {
+		terminalErr := errors.New("terminal failure")
+
+		p1 := pipefn.FromSlice([]int{1, 2})
+		p2 := pipefn.From(errorStream[int](terminalErr))
+
+		values, errs, failure := collect(pipefn.Concat(p1, p2))
+
+		// Values from the first pipe should still be emitted
+		require.Equal(t, []int{1, 2}, values)
+
+		// No intermediate pipe errors expected
+		require.Empty(t, errs)
+
+		// Terminal failure should propagate
+		require.ErrorIs(t, failure, terminalErr)
+	})
+
+	t.Run("with terminal failure on first pipe", func(t *testing.T) {
+		terminalErr := errors.New("terminal failure")
+
+		p1 := pipefn.From(errorStream[int](terminalErr))
+		p2 := pipefn.FromSlice([]int{3, 4})
+
+		values, errs, failure := collect(pipefn.Concat(p1, p2))
+
+		require.Empty(t, values)
+		require.Empty(t, errs)
+		require.ErrorIs(t, failure, terminalErr)
+	})
 }
 
 type seqStream[T any] struct {
@@ -487,4 +600,11 @@ func collect[T any](p pipefn.Pipe[T]) ([]T, []error, error) {
 
 	<-done
 	return vals, errs, values.Err()
+}
+
+func requireEmpty[T any](t *testing.T, p pipefn.Pipe[T]) {
+	values, errs, err := collect(p)
+	require.NoError(t, err, "unexpected error")
+	require.Empty(t, values, "unexpected values")
+	require.Empty(t, errs, "unexpected pipeline errors")
 }

@@ -272,8 +272,9 @@ func GroupBy[T any, K comparable](p Pipe[T], keyFunc func(T) K) Pipe[[]T] {
 // initFunc is called when a new group starts. It receives the first value of the
 // group and should returns the initial accumulator for that group.
 //
-// updateFunc is called for each value in the current group. It receives a pointer
-// to the accumulator and the current input value, and should updates the accumulator in place.
+// updateFunc is called for each value in the current group, including the first one.
+// It receives a pointer to the accumulator and the current input value, and should
+// updates the accumulator in place.
 //
 // For example, to sum values in each group:
 //
@@ -333,6 +334,110 @@ func GroupByAggregate[In any, K comparable, Out any](
 
 		}
 	})
+}
+
+// Concat combines multiple pipes into a single Pipe that emits all values
+// and pipeline errors produced by the input pipes, processing the pipes
+// sequentially in the order they are provided.
+//
+// Values and errors produced by earlier pipes are emitted before values and
+// errors from later pipes.
+
+// Once iteration begins, all input pipes are considered used. If a pipe
+// terminates early with an error, all subsequent pipes are still marked
+// as used. Iterating over them will produce a Stream whose Err() returns
+// ErrAlreadyConsumed.
+//
+// If pipes is empty, Concat returns an empty pipe.
+//
+// Terminal failures are reported through the concatenated value stream.
+// After the stream has been fully consumed, Stream.Err() returns the first
+// terminal error encountered among the input streams, if any. If a pipe
+// terminates with a failure, subsequent pipes are not processed.
+//
+// Example:
+//
+//	concat := Concat(p1, p2, p3)
+//
+//	values, errs := concat.Results()
+//
+//	// drain pipeline errors
+//	go func() {
+//		for err := range errs {
+//			log.Printf("pipeline error: %v", err)
+//		}
+//	}()
+//
+//	for v := range values.Seq() {
+//		process(v)
+//	}
+//
+//	// if non-nil, values.Err() reports the first terminal failure encountered
+//	if err := values.Err(); err != nil {
+//		// handle terminal failure
+//	}
+func Concat[T any](pipes ...Pipe[T]) Pipe[T] {
+
+	switch len(pipes) {
+	case 0:
+		return Pipe[T]{}
+	case 1:
+		return pipes[0]
+	}
+
+	concatErrs := make(chan error)
+	firstFailure := make(chan error, 1)
+
+	onceFailure := sync.OnceValue(func() error {
+		return <-firstFailure
+	})
+
+	return Pipe[T]{
+		header: &header{
+			errors: concatErrs,
+		},
+		values: seqStream[T]{
+			errFunc: onceFailure,
+			seq: func(yield func(T) bool) {
+				// currentPipeErrDone stores the done signal of currently
+				// emitting pipe
+				var currentPipeErrDone chan struct{}
+				defer func() {
+					<-currentPipeErrDone
+					close(firstFailure)
+				}()
+
+				// Consume all inputs upfront.
+				//
+				// From the POV of the caller, Concat should behave as a single atomic operation.
+				// If the 1st stream fails, any subsequent stream should still be considered consumed.
+				// NOTE: I'm not sure about that actually.
+				streams := make([]Stream[T], len(pipes))
+				errChans := make([]<-chan error, len(pipes))
+				for i, p := range pipes {
+					streams[i], errChans[i] = p.Results()
+				}
+
+				for i := range pipes {
+					stream := streams[i]
+					errs := errChans[i]
+
+					currentPipeErrDone = forwardErrors(errs, concatErrs)
+
+					for v := range stream.Seq() {
+						if !yield(v) {
+							return
+						}
+					}
+
+					if failure := stream.Err(); failure != nil {
+						firstFailure <- failure
+						return
+					}
+				}
+			},
+		},
+	}
 }
 
 // Merge combines multiple pipes into a single Pipe that emits all values
@@ -395,13 +500,19 @@ func Merge[T any](pipes ...Pipe[T]) Pipe[T] {
 	//	p2 := someOtherPipe()
 	//	merged := pipefn.Merge(p1, p2)
 	//	mergedBis := pipefn.Merge(merged, p1, p2) <== The suggested implementation wont catch this.
+
+	// Merge calls Results() OUTSIDE of the seq.
+	// This has a nasty side-effect: simply creating a Merge step immediately makes the input pipe "used".
+	// FIXME: call Results only when iteration begins. Also add a test that checks this side effect ?
+
 	for _, p := range pipes {
 		values, errs := p.Results()
 		allStreams = append(allStreams, values)
 		allErrors = append(allErrors, errs)
 	}
 
-	mergedErrors, errDone := fanInChans(allErrors...)
+	mergedErrors := make(chan error, len(pipes))
+	errDone := fanInChans(mergedErrors, allErrors...)
 
 	groupCtx, cancelGroup := context.WithCancel(context.Background())
 	group := fanInStreams(groupCtx, allStreams...)
@@ -434,6 +545,20 @@ func Merge[T any](pipes ...Pipe[T]) Pipe[T] {
 	}
 }
 
+// forwardErrors starts a goroutine that forwards every errors from src into dst.
+//
+// Once src is closed, forwardErrors closes done.
+func forwardErrors(src <-chan error, dst chan<- error) (done chan struct{}) {
+	done = make(chan struct{})
+	go func() {
+		for e := range src {
+			dst <- e
+		}
+		close(done)
+	}()
+	return done
+}
+
 func fanInStreams[T any](ctx context.Context, streams ...Stream[T]) *fanInGroup[T] {
 	group := newFaninGroup[T](ctx)
 	for _, s := range streams {
@@ -453,19 +578,19 @@ func fanInStreams[T any](ctx context.Context, streams ...Stream[T]) *fanInGroup[
 	return group
 }
 
-// fanInChans combines all chans in a single merged chan but does not close merged when all consumers are done.
+// fanInChans combines all chans in a single dst chan.
 //
-// instead it closes done to notify when merged *can* be closed
-func fanInChans[T any](chans ...<-chan T) (merged chan T, done chan struct{}) {
-	merged = make(chan T)
+// Once all inputs are closed and all values have been forwarded,
+// fanInChans closes done and it is safe to close dst.
+func fanInChans[T any](dst chan<- T, srcs ...<-chan T) (done chan struct{}) {
 	done = make(chan struct{})
 	var wg sync.WaitGroup
-	wg.Add(len(chans))
-	for _, ch := range chans {
+	wg.Add(len(srcs))
+	for _, ch := range srcs {
 		go func() {
 			defer wg.Done()
 			for item := range ch {
-				merged <- item
+				dst <- item
 			}
 		}()
 	}
@@ -473,5 +598,5 @@ func fanInChans[T any](chans ...<-chan T) (merged chan T, done chan struct{}) {
 		wg.Wait()
 		close(done)
 	}()
-	return merged, done
+	return done
 }
