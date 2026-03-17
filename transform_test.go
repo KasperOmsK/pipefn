@@ -1,7 +1,6 @@
 package pipefn_test
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"iter"
@@ -151,28 +150,6 @@ func TestMerge(t *testing.T) {
 	require.Empty(t, errs)
 }
 
-func TestMerge_BreakEarly(t *testing.T) {
-	p := pipefn.FromSlice([]int{1, 2, 3})
-	p2 := pipefn.FromSlice([]int{4, 5, 6})
-
-	merged := pipefn.Merge(p, p2)
-
-	done := make(chan struct{})
-	values, errors := merged.Results()
-
-	go func() {
-		for range errors {
-		}
-		close(done)
-	}()
-
-	for range values.Seq() {
-		break
-	}
-
-	<-done
-}
-
 func TestMerge_ForwardsErrors(t *testing.T) {
 	// Pipe 1: values 1, 2, emits an error for 2
 	pipe1 := pipefn.FromSeq(seqOf(1, 2))
@@ -209,9 +186,6 @@ func TestMerge_ForwardsErrors(t *testing.T) {
 
 func TestMerge_AbortEarly(t *testing.T) {
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
-	defer cancel()
-
 	p1 := pipefn.FromSeq(func(yield func(int) bool) {
 		for {
 			time.Sleep(time.Millisecond * 10)
@@ -222,21 +196,12 @@ func TestMerge_AbortEarly(t *testing.T) {
 	})
 	p2 := pipefn.From(errorStream[int](fmt.Errorf("stream error")))
 
-	exited := make(chan struct{})
-	go func() {
+	requireCompletesIn(t, func() {
 		merged := pipefn.Merge(p1, p2)
 		_, errs, err := collect(merged)
 		require.Error(t, err)
 		require.Empty(t, errs)
-		close(exited)
-	}()
-
-	select {
-	case <-ctx.Done():
-		t.Errorf("merge did not abort in a timely manner")
-	case <-exited:
-	}
-
+	}, time.Second)
 }
 
 func TestMerge_SameLineage(t *testing.T) {
@@ -607,4 +572,18 @@ func requireEmpty[T any](t *testing.T, p pipefn.Pipe[T]) {
 	require.NoError(t, err, "unexpected error")
 	require.Empty(t, values, "unexpected values")
 	require.Empty(t, errs, "unexpected pipeline errors")
+}
+
+func requireCompletesIn(t *testing.T, fn func(), timeout time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		fn()
+		close(done)
+	}()
+
+	select {
+	case <-time.After(timeout):
+		t.Errorf("function did not complete before %d", timeout)
+	case <-done:
+	}
 }

@@ -303,7 +303,6 @@ func GroupByAggregate[In any, K comparable, Out any](
 	keyFunc func(In) K,
 	initFunc func(first In) Out,
 	updateFunc func(acc *Out, item In)) Pipe[Out] {
-
 	return makeChildPipe(p, func(input iter.Seq[In], errs chan<- error) iter.Seq[Out] {
 		return func(yield func(Out) bool) {
 			var acc *Out
@@ -474,16 +473,13 @@ func Concat[T any](pipes ...Pipe[T]) Pipe[T] {
 //		// handle terminal failure
 //	}
 func Merge[T any](pipes ...Pipe[T]) Pipe[T] {
-	if len(pipes) == 0 {
-		return Pipe[T]{}
-	}
 
-	if len(pipes) == 1 {
+	switch len(pipes) {
+	case 0:
+		return Pipe[T]{}
+	case 1:
 		return pipes[0]
 	}
-
-	allStreams := make([]Stream[T], 0, len(pipes))
-	allErrors := make([]<-chan error, 0, len(pipes))
 
 	// NOTE: The api technically allows the caller to merge pipes of the same lineage... e.g.
 	//
@@ -501,23 +497,11 @@ func Merge[T any](pipes ...Pipe[T]) Pipe[T] {
 	//	merged := pipefn.Merge(p1, p2)
 	//	mergedBis := pipefn.Merge(merged, p1, p2) <== The suggested implementation wont catch this.
 
-	// Merge calls Results() OUTSIDE of the seq.
-	// This has a nasty side-effect: simply creating a Merge step immediately makes the input pipe "used".
-	// FIXME: call Results only when iteration begins. Also add a test that checks this side effect ?
-
-	for _, p := range pipes {
-		values, errs := p.Results()
-		allStreams = append(allStreams, values)
-		allErrors = append(allErrors, errs)
-	}
-
 	mergedErrors := make(chan error, len(pipes))
-	errDone := fanInChans(mergedErrors, allErrors...)
-
-	groupCtx, cancelGroup := context.WithCancel(context.Background())
-	group := fanInStreams(groupCtx, allStreams...)
-
-	waitOnce := sync.OnceValue(group.Wait)
+	firstErr := make(chan error, 1)
+	firstErrFunc := sync.OnceValue(func() error {
+		return <-firstErr
+	})
 
 	return Pipe[T]{
 		header: &header{
@@ -525,14 +509,33 @@ func Merge[T any](pipes ...Pipe[T]) Pipe[T] {
 		},
 		values: seqStream[T]{
 			seq: func(yield func(T) bool) {
+
+				defer close(firstErr)
+
+				allStreams := make([]Stream[T], 0, len(pipes))
+				allErrors := make([]<-chan error, 0, len(pipes))
+				for _, p := range pipes {
+					values, errs := p.Results()
+					allStreams = append(allStreams, values)
+					allErrors = append(allErrors, errs)
+				}
+
+				groupCtx, cancelGroup := context.WithCancel(context.Background())
+				group := fanInStreams(groupCtx, allStreams...)
+				go func() {
+					firstErr <- group.Wait()
+				}()
+
+				errDone := fanInChans(mergedErrors, allErrors...)
+
 				defer cancelGroup()
-				go waitOnce()
 				for v := range group.Out() {
 					if !yield(v) {
 						cancelGroup()
 						break
 					}
 				}
+
 				// wait for the signal that mergedErrors can be closed before stopping the Seq.
 				// we do it this way because the contract is:
 				//
@@ -540,7 +543,7 @@ func Merge[T any](pipes ...Pipe[T]) Pipe[T] {
 				//
 				<-errDone
 			},
-			errFunc: waitOnce,
+			errFunc: firstErrFunc,
 		},
 	}
 }
