@@ -50,7 +50,14 @@ func makeChildPipe[In, Out any](
 //
 // Upstream transformation errors and terminal failures from the
 // underlying Stream are propagated unchanged.
+//
+// Map panics if fn is nil.
 func Map[In, Out any](p Pipe[In], fn MapFunc[In, Out]) Pipe[Out] {
+
+	if fn == nil {
+		panic("pipefn.Map: fn is nil")
+	}
+
 	return makeChildPipe(p, func(input iter.Seq[In], errs chan<- error) iter.Seq[Out] {
 		return func(yield func(Out) bool) {
 			for in := range input {
@@ -68,7 +75,14 @@ func Map[In, Out any](p Pipe[In], fn MapFunc[In, Out]) Pipe[Out] {
 // FlatMap is equivalent to calling Flatten(Map(p, fn)).
 //
 // Transformation errors and terminal failures from the input pipe are propagated unchanged.
+//
+// FlatMap panics if fn is nil.
 func FlatMap[In, Out any](p Pipe[In], fn MapFunc[In, []Out]) Pipe[Out] {
+
+	if fn == nil {
+		panic("pipefn.FlatMap: fn is nil")
+	}
+
 	return Flatten(Map(p, fn))
 }
 
@@ -80,7 +94,14 @@ func FlatMap[In, Out any](p Pipe[In], fn MapFunc[In, []Out]) Pipe[Out] {
 //
 // Transformation errors produced by TryMap are added to the input pipe's
 // error channel. Any terminal failure from the input pipe is propagated unchanged.
+//
+// TryMap panics if fn is nil.
 func TryMap[In, Out any](p Pipe[In], fn TryMapFunc[In, Out]) Pipe[Out] {
+
+	if fn == nil {
+		panic("pipefn.TryMap: fn is nil")
+	}
+
 	return makeChildPipe(p, func(input iter.Seq[In], errs chan<- error) iter.Seq[Out] {
 		return func(yield func(Out) bool) {
 			for in := range input {
@@ -113,7 +134,12 @@ func TryMap[In, Out any](p Pipe[In], fn TryMapFunc[In, Out]) Pipe[Out] {
 // error channel. Any terminal failure from the input pipe is propagated unchanged.
 //
 // FlatTryMap is equivalent to calling Flatten(TryMap(p, fn)).
+//
+// FlatTryMap panics if fn is nil.
 func FlatTryMap[In, Out any](p Pipe[In], fn TryMapFunc[In, []Out]) Pipe[Out] {
+	if fn == nil {
+		panic("pipefn.FlatTryMap: fn is nil")
+	}
 	return Flatten(TryMap(p, fn))
 }
 
@@ -121,7 +147,14 @@ func FlatTryMap[In, Out any](p Pipe[In], fn TryMapFunc[In, []Out]) Pipe[Out] {
 // returns true.
 //
 // Transformation errors and terminal failures from the input pipe are propagated unchanged.
+//
+// Filter panics if predicate is nil.
 func Filter[T any](p Pipe[T], predicate Predicate[T]) Pipe[T] {
+
+	if predicate == nil {
+		panic("pipefn.Filter: predicate is nil")
+	}
+
 	return makeChildPipe(p, func(input iter.Seq[T], errs chan<- error) iter.Seq[T] {
 		return func(yield func(T) bool) {
 			for in := range input {
@@ -162,7 +195,7 @@ func Flatten[T any](p Pipe[[]T]) Pipe[T] {
 // Transformation errors and terminal failures from the input pipe are propagated unchanged.
 func Chunk[T any](p Pipe[T], chunkSize int) Pipe[[]T] {
 	if chunkSize <= 0 {
-		panic("pipeline.Chunk: chunkSize must be positive")
+		panic("pipefn.Chunk: chunkSize is not positive")
 	}
 
 	return makeChildPipe(p, func(input iter.Seq[T], errs chan<- error) iter.Seq[[]T] {
@@ -236,7 +269,14 @@ func Chunk[T any](p Pipe[T], chunkSize int) Pipe[[]T] {
 //	[A, A], [B, B], [A]
 //
 // Transformation errors and terminal failures from the input pipe are propagated unchanged.
+//
+// GroupBy panics if keyFunc is nil.
 func GroupBy[T any, K comparable](p Pipe[T], keyFunc func(T) K) Pipe[[]T] {
+
+	if keyFunc == nil {
+		panic("pipefn.GroupBy: keyFunc is nil")
+	}
+
 	return makeChildPipe(p, func(input iter.Seq[T], errs chan<- error) iter.Seq[[]T] {
 		return func(yield func([]T) bool) {
 
@@ -298,11 +338,23 @@ func GroupBy[T any, K comparable](p Pipe[T], keyFunc func(T) K) Pipe[[]T] {
 //	[A1, A2], [B1, B2], [A3]
 //
 // Transformation errors and terminal failures from the input pipe are propagated unchanged.
+//
+// GroupByAggregate panics if either keyFunc, initFunc or updateFunc is nil.
 func GroupByAggregate[In any, K comparable, Out any](
 	p Pipe[In],
 	keyFunc func(In) K,
 	initFunc func(first In) Out,
 	updateFunc func(acc *Out, item In)) Pipe[Out] {
+
+	switch {
+	case keyFunc == nil:
+		panic("pipefn.GroupByAggregate: keyFunc is nil")
+	case initFunc == nil:
+		panic("pipefn.GroupByAggregate: initFunc is nil")
+	case updateFunc == nil:
+		panic("pipefn.GroupByAggregate: updateFunc is nil")
+	}
+
 	return makeChildPipe(p, func(input iter.Seq[In], errs chan<- error) iter.Seq[Out] {
 		return func(yield func(Out) bool) {
 			var acc *Out
