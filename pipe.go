@@ -136,10 +136,9 @@ func FromChan[T any](ch <-chan T) Pipe[T] {
 //	values, errs := p.Results()
 //
 //	// drain errs
-//	var wg sync.WaitGroup
-//	wg.Add(1)
+//	done := make(chan struct{})
 //	go func() {
-//	    defer wg.Done()
+//	    defer close(done)
 //	    for err := range errs {
 //	        perr := err.(*PipeError)
 //	        log.Printf("pipeline error: item %v: %s", perr.Item, perr.Reason)
@@ -155,8 +154,8 @@ func FromChan[T any](ch <-chan T) Pipe[T] {
 //	    // handle terminal failure (e.g. rollback or discard processed work)
 //	}
 //
-//	wg.Wait()
-func (p Pipe[T]) Results() (Stream[T], <-chan error) {
+//	<-done
+func (p Pipe[T]) Results() (values Stream[T], errs <-chan error) {
 	if p.header == nil {
 		empty := emptyPipe[T]()
 		return empty.Results()
@@ -199,7 +198,7 @@ func (p Pipe[T]) Results() (Stream[T], <-chan error) {
 // Typical usage:
 //
 //	stream := p.Values()
-//	for v := range stream.Seq {
+//	for v := range stream.Seq() {
 //		process(v)
 //	}
 //

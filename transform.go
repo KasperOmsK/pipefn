@@ -54,8 +54,7 @@ func makeChildPipe[In, Out any](
 
 // Map returns a Pipe that applies fn to each value produced by p.
 //
-// Upstream transformation errors and terminal failures from the
-// underlying Stream are propagated unchanged.
+// Transformation errors and terminal failures from the input pipe are propagated unchanged.
 //
 // Map panics if fn is nil.
 func Map[In, Out any](p Pipe[In], fn MapFunc[In, Out]) Pipe[Out] {
@@ -196,9 +195,9 @@ func Flatten[T any](p Pipe[[]T]) Pipe[T] {
 //
 // The final chunk may be smaller than chunkSize.
 //
-// Chunk panics if chunkSize is not positive.
-//
 // Transformation errors and terminal failures from the input pipe are propagated unchanged.
+//
+// Chunk panics if chunkSize is not positive.
 func Chunk[T any](p Pipe[T], chunkSize int) Pipe[[]T] {
 	if chunkSize <= 0 {
 		panic("pipefn.Chunk: chunkSize is not positive")
@@ -399,7 +398,7 @@ func GroupByAggregate[In any, K comparable, Out any](
 //
 // Values and errors produced by earlier pipes are emitted before values and
 // errors from later pipes.
-
+//
 // Once iteration begins, all input pipes are considered used. If a pipe
 // terminates early with an error, all subsequent pipes are still marked
 // as used. Iterating over them will produce a Stream whose Err() returns
@@ -411,28 +410,6 @@ func GroupByAggregate[In any, K comparable, Out any](
 // After the stream has been fully consumed, Stream.Err() returns the first
 // terminal error encountered among the input streams, if any. If a pipe
 // terminates with a failure, subsequent pipes are not processed.
-//
-// Example:
-//
-//	concat := Concat(p1, p2, p3)
-//
-//	values, errs := concat.Results()
-//
-//	// drain pipeline errors
-//	go func() {
-//		for err := range errs {
-//			log.Printf("pipeline error: %v", err)
-//		}
-//	}()
-//
-//	for v := range values.Seq() {
-//		process(v)
-//	}
-//
-//	// if non-nil, values.Err() reports the first terminal failure encountered
-//	if err := values.Err(); err != nil {
-//		// handle terminal failure
-//	}
 func Concat[T any](pipes ...Pipe[T]) Pipe[T] {
 
 	switch len(pipes) {
@@ -507,29 +484,7 @@ func Concat[T any](pipes ...Pipe[T]) Pipe[T] {
 //
 // Terminal failures are reported through the merged value stream. After the
 // stream has been fully consumed, Stream.Err() returns the first terminal
-// error encountered among the merged streams, if any.
-//
-// Example:
-//
-//	merged := Merge(p1, p2, p3)
-//
-//	values, errs := merged.Results()
-//
-//	// drain pipeline errors
-//	go func() {
-//		for err := range errs {
-//			log.Printf("pipeline error: %v", err)
-//		}
-//	}()
-//
-//	for v := range values.Seq() {
-//		process(v)
-//	}
-//
-//	// if non-nil, values.Err() reports the first terminal failure encountered
-//	if err := values.Err(); err != nil {
-//		// handle terminal failure
-//	}
+// error encountered among the merged pipes, if any.
 func Merge[T any](pipes ...Pipe[T]) Pipe[T] {
 
 	switch len(pipes) {
