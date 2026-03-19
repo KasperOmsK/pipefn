@@ -226,19 +226,17 @@ func (p Pipe[T]) Values() Stream[T] {
 // reported by the value stream, if any.
 func (p Pipe[T]) ForEach(consumeFn func(item T), errorFn func(err error)) error {
 	values, errors := p.Results()
-	var errorWg sync.WaitGroup
-	errorWg.Add(1)
+	done := make(chan struct{})
 	go func() {
-		defer errorWg.Done()
 		for err := range errors {
 			errorFn(err)
 		}
+		close(done)
 	}()
 	for i := range values.Seq() {
 		consumeFn(i)
 	}
-	errorWg.Wait()
-
+	<-done
 	return values.Err()
 }
 
@@ -251,17 +249,26 @@ func (p Pipe[T]) ForEach(consumeFn func(item T), errorFn func(err error)) error 
 // Collect fully drains the Pipe; after calling it, the Pipe cannot be consumed again.
 func (p Pipe[T]) Collect() ([]T, []error, error) {
 	var (
-		values []T
-		errors []error
+		outValues []T
+		outErrors []error
 	)
 
-	failure := p.ForEach(func(item T) {
-		values = append(values, item)
-	}, func(err error) {
-		errors = append(errors, err)
-	})
+	values, errs := p.Results()
 
-	return values, errors, failure
+	done := make(chan struct{})
+	go func() {
+		for e := range errs {
+			outErrors = append(outErrors, e)
+		}
+		close(done)
+	}()
+
+	for v := range values.Seq() {
+		outValues = append(outValues, v)
+	}
+	<-done
+
+	return outValues, outErrors, values.Err()
 }
 
 // Tap modifies p so that tapFn is called for each element that passes through p.
