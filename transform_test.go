@@ -569,6 +569,147 @@ func TestConcat(t *testing.T) {
 	})
 }
 
+func TestZip(t *testing.T) {
+
+	lSlice := []string{"a", "b", "c"}
+	rSlice := []int{1, 2, 3}
+
+	t.Run("zips correctly", func(t *testing.T) {
+
+		left := pipefn.FromSlice(lSlice)
+		right := pipefn.FromSlice(rSlice)
+		zipped := pipefn.Zip(left, right)
+
+		values, errs, err := collect(zipped)
+
+		require.Empty(t, errs)
+		require.NoError(t, err)
+		require.Len(t, values, len(rSlice))
+
+		for i, v := range values {
+			require.Equal(t, lSlice[i], v.LValue)
+			require.Equal(t, rSlice[i], v.RValue)
+		}
+	})
+
+	t.Run("break not blocks", func(t *testing.T) {
+		left := pipefn.FromSlice(lSlice)
+		right := pipefn.FromSlice(rSlice)
+		zipped := pipefn.Zip(left, right)
+
+		values := zipped.Values()
+
+		requireCompletesIn(t, func() {
+			for range values.Seq() {
+				break
+			}
+		}, time.Second)
+
+		require.NoError(t, values.Err())
+	})
+
+	t.Run("stops on shorter left", func(t *testing.T) {
+		longer := pipefn.FromSlice(lSlice)
+		shorter := pipefn.FromSlice([]int{1})
+		zipped := pipefn.Zip(shorter, longer)
+
+		values, errs, err := collect(zipped)
+
+		require.Empty(t, errs)
+		require.NoError(t, err)
+		require.Len(t, values, 1)
+	})
+
+	t.Run("stops on shorter right", func(t *testing.T) {
+		longer := pipefn.FromSlice(lSlice)
+		shorter := pipefn.FromSlice([]int{1})
+		zipped := pipefn.Zip(longer, shorter)
+
+		values, errs, err := collect(zipped)
+
+		require.Empty(t, errs)
+		require.NoError(t, err)
+		require.Len(t, values, 1)
+
+	})
+
+	t.Run("forwards errors from left", func(t *testing.T) {
+		errorPipe := pipeWithError[int](len(rSlice))
+
+		valuePipe := pipefn.FromSlice(rSlice)
+		zipped := pipefn.Zip(errorPipe, valuePipe)
+		values, errs, err := collect(zipped)
+
+		require.Len(t, values, 0)
+		require.Len(t, errs, len(rSlice))
+		require.NoError(t, err)
+	})
+
+	t.Run("forwards errors from right", func(t *testing.T) {
+		errorPipe := pipeWithError[int](len(rSlice))
+		valuePipe := pipefn.FromSlice(rSlice)
+		zipped := pipefn.Zip(valuePipe, errorPipe)
+		values, errs, err := collect(zipped)
+
+		require.Len(t, values, 0)
+		require.Len(t, errs, len(rSlice))
+		require.NoError(t, err)
+	})
+
+	t.Run("left terminal failure", func(t *testing.T) {
+		okPipe := pipefn.FromSeq(func(yield func(int) bool) {
+			for {
+				time.Sleep(time.Millisecond * 10)
+				if !yield(1) {
+					return
+				}
+			}
+		})
+		terminalFailure := fmt.Errorf("stream error")
+		failingPipe := pipefn.From(errorStream[int](terminalFailure))
+
+		zipped := pipefn.Zip(failingPipe, okPipe)
+		values, errs, err := collect(zipped)
+
+		require.ErrorIs(t, err, terminalFailure)
+		require.Empty(t, values)
+		require.Empty(t, errs)
+
+	})
+
+	t.Run("right terminal failure", func(t *testing.T) {
+		okPipe := pipefn.FromSeq(func(yield func(int) bool) {
+			for {
+				time.Sleep(time.Millisecond * 10)
+				if !yield(1) {
+					return
+				}
+			}
+		})
+		terminalFailure := fmt.Errorf("stream error")
+		failingPipe := pipefn.From(errorStream[int](terminalFailure))
+
+		zipped := pipefn.Zip(okPipe, failingPipe)
+		values, errs, err := collect(zipped)
+
+		require.ErrorIs(t, err, terminalFailure)
+		require.Empty(t, values)
+		require.Empty(t, errs)
+	})
+}
+
+func pipeWithError[T any](errCount int) pipefn.Pipe[T] {
+	fakeData := make([]int, errCount)
+	for i := range errCount {
+		fakeData[i] = i
+	}
+	p := pipefn.FromSlice(fakeData)
+	stubValue := *new(T)
+	return pipefn.TryMap(p, func(in int) (T, error) {
+		return stubValue, fmt.Errorf("err %d", in)
+	})
+}
+
 type seqStream[T any] struct {
 	seq     iter.Seq[T]
 	errFunc func() error

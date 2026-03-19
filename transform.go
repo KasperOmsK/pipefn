@@ -2,6 +2,7 @@ package pipefn
 
 import (
 	"context"
+	"fmt"
 	"iter"
 	"sync"
 )
@@ -21,6 +22,11 @@ type (
 	// Predicate represents a filtering function that returns true when the
 	// provided value should be included in the output stream.
 	Predicate[T any] func(item T) bool
+
+	Tuple[Left, Right any] struct {
+		LValue Left
+		RValue Right
+	}
 )
 
 // TODO: consider making makeChildPipe public as a "low-level" primitive.
@@ -594,6 +600,85 @@ func Merge[T any](pipes ...Pipe[T]) Pipe[T] {
 				//	all errors on pipe.header.errors *must* be sent before the Seq returns.
 				//
 				<-errDone
+			},
+			errFunc: firstErrFunc,
+		},
+	}
+}
+
+// Zip combines two pipes into a single Pipe that emits pairs of values,
+// where each pair consists of one value from the left pipe and one value
+// from the right pipe.
+//
+// Values are produced in lockstep: Zip waits until both pipes have emitted
+// a value, then emits a Tuple containing those values. The relative ordering
+// within each input pipe is preserved.
+//
+// The resulting pipe terminates as soon as either input pipe is exhausted.
+// Any remaining values in the other pipe are discarded.
+//
+// Zip may consume more values from its input pipes than are ultimately
+// emitted. In particular, it may read ahead from one pipe even if the other
+// pipe has already terminated.
+//
+// Transformation errors from the input pipes are propagated unchanged.
+//
+// After the stream has been fully consumed, Stream.Err() returns the first
+// terminal error encountered from either input pipe, if any.
+func Zip[Left, Right any](left Pipe[Left], right Pipe[Right]) Pipe[Tuple[Left, Right]] {
+
+	// FIXME: same problem as Merge/Concat: shared lineage causes issues
+
+	mergedErrors := make(chan error, 2)
+	firstErr := make(chan error, 1)
+	firstErrFunc := sync.OnceValue(func() error {
+		return <-firstErr
+	})
+
+	return Pipe[Tuple[Left, Right]]{
+		header: &header{
+			errors: mergedErrors,
+		},
+		values: seqStream[Tuple[Left, Right]]{
+			seq: func(yield func(Tuple[Left, Right]) bool) {
+
+				leftValues, leftErrs := left.Results()
+				rightValues, rightErrs := right.Results()
+
+				errDone := fanInChans(mergedErrors, leftErrs, rightErrs)
+
+				nextLeft, stopLeft := iter.Pull(leftValues.Seq())
+				nextRight, stopRight := iter.Pull(rightValues.Seq())
+
+				for {
+					left, leftOk := nextLeft()
+					right, rightOk := nextRight()
+
+					if !leftOk {
+						if err := leftValues.Err(); err != nil {
+							firstErr <- fmt.Errorf("pipefn.Zip: left: %w", err)
+						}
+						break
+					}
+
+					if !rightOk {
+						if err := rightValues.Err(); err != nil {
+							firstErr <- fmt.Errorf("pipefn.Zip: right: %w", err)
+						}
+						break
+					}
+
+					if !yield(Tuple[Left, Right]{
+						LValue: left,
+						RValue: right,
+					}) {
+						break
+					}
+				}
+				stopRight()
+				stopLeft()
+				<-errDone
+				close(firstErr)
 			},
 			errFunc: firstErrFunc,
 		},

@@ -251,3 +251,21 @@ func ExampleConcat() {
 	// 4
 	// 5
 }
+
+func ExampleZip() {
+	p1 := pipefn.FromSlice([]int{1, 2, 3, 4})
+	p2 := pipefn.FromSlice([]string{"a", "b", "c"})
+
+	zipped := pipefn.Zip(p1, p2)
+
+	values, _, _ := zipped.Collect()
+
+	for _, v := range values {
+		fmt.Printf("left=%d, right=%s\n", v.LValue, v.RValue)
+	}
+
+	// Output:
+	// left=1, right=a
+	// left=2, right=b
+	// left=3, right=c
+}
