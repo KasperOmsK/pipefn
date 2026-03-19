@@ -134,12 +134,12 @@ func ExampleFilter() {
 	// 4
 }
 
-func ExampleGroupBy() {
+func ExampleGroupByKey() {
 
 	input := pipefn.FromSlice([]string{"apple", "apricot", "banana", "blueberry", "cherry", "avocado"})
 
 	// Group strings by their first letter
-	grouped := pipefn.GroupBy(input, func(s string) string {
+	grouped := pipefn.GroupByKey(input, func(s string) string {
 		return string(s[0])
 	})
 
@@ -157,7 +157,7 @@ func ExampleGroupBy() {
 	// [avocado]
 }
 
-func ExampleGroupByAggregate() {
+func ExampleGroupByKeyAggregate() {
 	input := pipefn.FromSlice(
 		[]int{
 			1, 2,
@@ -177,7 +177,7 @@ func ExampleGroupByAggregate() {
 		*acc += v // add the value to the accumulator
 	}
 
-	grouped := pipefn.GroupByAggregate(input, keyFunc, initFunc, updateFunc)
+	grouped := pipefn.GroupByKeyAggregate(input, keyFunc, initFunc, updateFunc)
 
 	values, _, _ := grouped.Collect()
 	for _, v := range values {

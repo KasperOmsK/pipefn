@@ -183,7 +183,7 @@ func TestTap_NoFunc(t *testing.T) {
 
 func TestYieldAfterExit(t *testing.T) {
 	input := pipefn.FromSlice([]int{1})
-	grouped := pipefn.GroupBy(input, func(t int) int { return t })
+	grouped := pipefn.GroupByKey(input, func(t int) int { return t })
 	mapped := pipefn.TryMap(grouped, func(in []int) (int, error) { return 0, fmt.Errorf("oops") })
 	require.NotPanics(t, func() {
 		collect(mapped)

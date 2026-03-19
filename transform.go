@@ -255,10 +255,10 @@ func Chunk[T any](p Pipe[T], chunkSize int) Pipe[[]T] {
 	})
 }
 
-// GroupBy groups consecutive input values according to a key function and
+// GroupByKey groups consecutive input values according to a key function and
 // returns a Pipe producing slices of those grouped values.
 //
-// GroupBy does not reorder values; it relies on the input Pipe already being
+// GroupByKey does not reorder values; it relies on the input Pipe already being
 // ordered by the grouping key if consistent grouping is desired.
 //
 // In other words, Values are grouped only when they appear consecutively with the same key.
@@ -269,14 +269,14 @@ func Chunk[T any](p Pipe[T], chunkSize int) Pipe[[]T] {
 //
 //	A, A, B, B, A
 //
-// GroupBy will emit:
+// GroupByKey will emit:
 //
 //	[A, A], [B, B], [A]
 //
 // Transformation errors and terminal failures from the input pipe are propagated unchanged.
 //
-// GroupBy panics if keyFunc is nil.
-func GroupBy[T any, K comparable](p Pipe[T], keyFunc func(T) K) Pipe[[]T] {
+// GroupByKey panics if keyFunc is nil.
+func GroupByKey[T any, K comparable](p Pipe[T], keyFunc func(T) K) Pipe[[]T] {
 
 	if keyFunc == nil {
 		panic("pipefn.GroupBy: keyFunc is nil")
@@ -307,10 +307,10 @@ func GroupBy[T any, K comparable](p Pipe[T], keyFunc func(T) K) Pipe[[]T] {
 	})
 }
 
-// GroupByAggregate groups input values by key and aggregates them using user-supplied
+// GroupByKeyAggregate groups input values by key and aggregates them using user-supplied
 // initialization and update callbacks, producing one aggregated output value per group.
 //
-// GroupByAggregate is equivalent to performing a GroupBy followed by a Map,
+// GroupByKeyAggregate is equivalent to performing a GroupByKey followed by a Map,
 // but does so without allocating a slice for each group. This makes it preferred
 // for pipelines where groups may be large.
 //
@@ -331,21 +331,21 @@ func GroupBy[T any, K comparable](p Pipe[T], keyFunc func(T) K) Pipe[[]T] {
 //	    *acc += v // add the value to the accumulator
 //	}
 //
-// Like GroupBy, GroupByAggregate does not reorder input values. The input Pipe
+// Like GroupBy, GroupByKeyAggregate does not reorder input values. The input Pipe
 // must already be ordered by key if consistent aggregation per key is desired.
 //
 // For example, with input values:
 //
 //	A1, A2, B1, B2, A3
 //
-// GroupByAggregate will emit aggregated results for:
+// GroupByKeyAggregate will emit aggregated results for:
 //
 //	[A1, A2], [B1, B2], [A3]
 //
 // Transformation errors and terminal failures from the input pipe are propagated unchanged.
 //
-// GroupByAggregate panics if either keyFunc, initFunc or updateFunc is nil.
-func GroupByAggregate[In any, K comparable, Out any](
+// GroupByKeyAggregate panics if either keyFunc, initFunc or updateFunc is nil.
+func GroupByKeyAggregate[In any, K comparable, Out any](
 	p Pipe[In],
 	keyFunc func(In) K,
 	initFunc func(first In) Out,

@@ -312,13 +312,13 @@ func TestFlatMap(t *testing.T) {
 	})
 }
 
-func TestGroupBy(t *testing.T) {
+func TestGroupByKey(t *testing.T) {
 	t.Run("group correctly", func(t *testing.T) {
 		// Define a simple pipe of letters
 		input := pipefn.FromSeq(seqOf("A", "A", "B", "B", "A", "C", "C", "C"))
 
 		// Group consecutive letters
-		grouped := pipefn.GroupBy(input, func(s string) string { return s })
+		grouped := pipefn.GroupByKey(input, func(s string) string { return s })
 
 		vals, errs, err := collect(grouped)
 		require.NoError(t, err)
@@ -338,7 +338,7 @@ func TestGroupBy(t *testing.T) {
 
 	t.Run("empty input", func(t *testing.T) {
 		input := pipefn.Pipe[string]{}
-		grouped := pipefn.GroupBy(input, func(t string) string { return t })
+		grouped := pipefn.GroupByKey(input, func(t string) string { return t })
 		requireEmpty(t, grouped)
 	})
 
@@ -353,7 +353,7 @@ func TestGroupBy(t *testing.T) {
 		})
 
 		// Group by value
-		grouped := pipefn.GroupBy(inputWithErr, func(v int) int { return v })
+		grouped := pipefn.GroupByKey(inputWithErr, func(v int) int { return v })
 
 		vals, errs, err := collect(grouped)
 		require.NoError(t, err)
@@ -374,7 +374,7 @@ func TestGroupBy(t *testing.T) {
 
 	t.Run("panics if keyFunc is nil", func(t *testing.T) {
 		require.Panics(t, func() {
-			pipefn.GroupBy[int, int](pipefn.Pipe[int]{}, nil)
+			pipefn.GroupByKey[int, int](pipefn.Pipe[int]{}, nil)
 		})
 	})
 }
@@ -394,7 +394,7 @@ func TestGroupByAggregate(t *testing.T) {
 			Record{"A", 3}, // new A group
 		))
 
-		aggregated := pipefn.GroupByAggregate(input,
+		aggregated := pipefn.GroupByKeyAggregate(input,
 			func(r Record) string { return r.Key },       // key function
 			func(first Record) int { return 0 },          // init accumulator
 			func(acc *int, r Record) { *acc += r.Value }) // update accumulator
@@ -408,7 +408,7 @@ func TestGroupByAggregate(t *testing.T) {
 
 	t.Run("empty input", func(t *testing.T) {
 		input := pipefn.FromSeq(seqOf[Record]())
-		aggregated := pipefn.GroupByAggregate(input,
+		aggregated := pipefn.GroupByKeyAggregate(input,
 			func(r Record) string { return r.Key },
 			func(first Record) int { return 0 },
 			func(acc *int, r Record) { *acc += r.Value })
@@ -429,7 +429,7 @@ func TestGroupByAggregate(t *testing.T) {
 			return r, nil
 		})
 
-		aggregated := pipefn.GroupByAggregate(inputWithErr,
+		aggregated := pipefn.GroupByKeyAggregate(inputWithErr,
 			func(r Record) string { return r.Key },
 			func(first Record) int { return 0 },
 			func(acc *int, r Record) { *acc += r.Value })
@@ -447,19 +447,19 @@ func TestGroupByAggregate(t *testing.T) {
 
 	t.Run("panics if keyFunc is nil", func(t *testing.T) {
 		require.Panics(t, func() {
-			pipefn.GroupByAggregate[int, int, int](pipefn.Pipe[int]{}, nil, func(first int) int { return 0 }, func(acc *int, item int) {})
+			pipefn.GroupByKeyAggregate[int, int, int](pipefn.Pipe[int]{}, nil, func(first int) int { return 0 }, func(acc *int, item int) {})
 		})
 	})
 
 	t.Run("panics if initFunc is nil", func(t *testing.T) {
 		require.Panics(t, func() {
-			pipefn.GroupByAggregate[int, int, int](pipefn.Pipe[int]{}, func(i int) int { return 0 }, nil, func(acc *int, item int) {})
+			pipefn.GroupByKeyAggregate[int, int, int](pipefn.Pipe[int]{}, func(i int) int { return 0 }, nil, func(acc *int, item int) {})
 		})
 	})
 
 	t.Run("panics if updateFunc is nil", func(t *testing.T) {
 		require.Panics(t, func() {
-			pipefn.GroupByAggregate[int, int, int](pipefn.Pipe[int]{}, func(i int) int { return 0 }, func(first int) int { return 0 }, nil)
+			pipefn.GroupByKeyAggregate[int, int, int](pipefn.Pipe[int]{}, func(i int) int { return 0 }, func(first int) int { return 0 }, nil)
 		})
 	})
 }
