@@ -303,6 +303,10 @@ func (pe *PipeError) Error() string {
 	return fmt.Sprintf("%+v: %s", pe.Item, pe.Reason)
 }
 
+func (pe *PipeError) Unwrap() error {
+	return pe.Reason
+}
+
 func emptyPipe[T any]() Pipe[T] {
 	return FromSlice([]T{})
 }
