@@ -4,6 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"math"
+	"math/rand"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +17,14 @@ import (
 )
 
 func TestMap(t *testing.T) {
+
+	t.Run("test invariants", func(t *testing.T) {
+		sc := NewUnaryScenario(IntFactory{}, func(input pipefn.Pipe[int]) pipefn.Pipe[int] {
+			return pipefn.Map(input, func(in int) int { return in * in })
+		})
+		sc.Run(t)
+	})
+
 	t.Run("transforms correctly", func(t *testing.T) {
 
 		src := pipefn.FromSeq(seqOf(1, 2, 3))
@@ -37,7 +48,27 @@ func TestMap(t *testing.T) {
 }
 
 func TestTryMap(t *testing.T) {
-	t.Run("forwards errors", func(t *testing.T) {
+
+	t.Run("test invariants", func(t *testing.T) {
+		t.Run("without errors", func(t *testing.T) {
+			sc := NewUnaryScenario(IntFactory{}, func(input pipefn.Pipe[int]) pipefn.Pipe[int] {
+				return pipefn.TryMap(input, func(in int) (int, error) {
+					return in * in, nil
+				})
+			})
+			sc.Run(t)
+		})
+		t.Run("with errors", func(t *testing.T) {
+			sc := NewUnaryScenario(IntFactory{}, func(input pipefn.Pipe[int]) pipefn.Pipe[int] {
+				return pipefn.TryMap(input, func(in int) (int, error) {
+					return 0, fmt.Errorf("!!!explosion noise!!!")
+				})
+			})
+			sc.Run(t)
+		})
+	})
+
+	t.Run("generates errors", func(t *testing.T) {
 		src := pipefn.FromSeq(seqOf(1, 2, 3, 4))
 
 		p := pipefn.TryMap(src, func(v int) (int, error) {
@@ -62,6 +93,14 @@ func TestTryMap(t *testing.T) {
 }
 
 func TestFilter(t *testing.T) {
+
+	t.Run("test invariants", func(t *testing.T) {
+		sc := NewUnaryScenario(IntFactory{}, func(input pipefn.Pipe[int]) pipefn.Pipe[int] {
+			return pipefn.Filter(input, func(item int) bool { return item%2 == 0 })
+		})
+		sc.Run(t)
+	})
+
 	t.Run("filters correctly", func(t *testing.T) {
 		src := pipefn.FromSeq(seqOf(1, 2, 3, 4, 5))
 
@@ -76,36 +115,6 @@ func TestFilter(t *testing.T) {
 		require.Empty(t, errs)
 	})
 
-	t.Run("forwards errors", func(t *testing.T) {
-		// Input sequence
-		input := pipefn.FromSeq(seqOf(1, 2, 3, 4, 5))
-
-		// Inject errors for some values using TryMap
-		inputWithErr := pipefn.TryMap(input, func(v int) (int, error) {
-			if v%2 == 0 {
-				return 0, fmt.Errorf("even number: %d", v)
-			}
-			return v, nil
-		})
-
-		// Filter values greater than 2
-		filtered := pipefn.Filter(inputWithErr, func(v int) bool {
-			return v > 2
-		})
-
-		vals, errs, err := collect(filtered)
-		require.NoError(t, err)
-
-		// Only odd values greater than 2 should remain
-		require.Equal(t, []int{3, 5}, vals)
-
-		// Errors should include the ones for even numbers
-		require.Len(t, errs, 2)
-		errorMsgs := []string{toPipelineError(errs[0]).Reason.Error(), toPipelineError(errs[1]).Reason.Error()}
-		require.Contains(t, errorMsgs, "even number: 2")
-		require.Contains(t, errorMsgs, "even number: 4")
-	})
-
 	t.Run("panics if predicate is nil", func(t *testing.T) {
 		require.Panics(t, func() {
 			pipefn.Filter(pipefn.Pipe[int]{}, nil)
@@ -114,6 +123,14 @@ func TestFilter(t *testing.T) {
 }
 
 func TestChunk(t *testing.T) {
+
+	t.Run("test invariants", func(t *testing.T) {
+		sc := NewUnaryScenario(IntFactory{}, func(input pipefn.Pipe[int]) pipefn.Pipe[[]int] {
+			return pipefn.Chunk(input, 10)
+		})
+		sc.Run(t)
+	})
+
 	t.Run("chunks correctly", func(t *testing.T) {
 		src := pipefn.FromSeq(seqOf(1, 2, 3, 4, 5))
 
@@ -229,6 +246,28 @@ func TestMerge(t *testing.T) {
 func TestFlatTryMap(t *testing.T) {
 	// tests that FlatTryMap behaves identically to Flatten(TryMap)
 
+	t.Run("test invariants", func(t *testing.T) {
+
+		t.Run("without errors", func(t *testing.T) {
+			sc := NewUnaryScenario(IntFactory{}, func(input pipefn.Pipe[int]) pipefn.Pipe[int] {
+				return pipefn.FlatTryMap(input, func(in int) ([]int, error) {
+					return []int{1, 2, 3}, nil
+				})
+			})
+			sc.Run(t)
+		})
+
+		t.Run("with errors", func(t *testing.T) {
+			sc := NewUnaryScenario(IntFactory{}, func(input pipefn.Pipe[int]) pipefn.Pipe[int] {
+				return pipefn.FlatTryMap(input, func(in int) ([]int, error) {
+					return nil, fmt.Errorf("badaboom")
+				})
+			})
+			sc.Run(t)
+		})
+
+	})
+
 	t.Run("behaves correctly", func(t *testing.T) {
 		tryMap := func(in string) ([]string, error) {
 
@@ -263,6 +302,21 @@ func TestFlatTryMap(t *testing.T) {
 }
 
 func TestFlatMap(t *testing.T) {
+
+	t.Run("test invariants", func(t *testing.T) {
+
+		t.Run("without errors", func(t *testing.T) {
+			sc := NewUnaryScenario(IntFactory{}, func(input pipefn.Pipe[int]) pipefn.Pipe[int] {
+				return pipefn.FlatMap(input, func(in int) []int {
+					return []int{
+						in % 5,
+						in - (in % 5),
+					}
+				})
+			})
+			sc.Run(t)
+		})
+	})
 
 	t.Run("identical to Flatten(Map())", func(t *testing.T) {
 		// tests that FlatMap behaves identically to Flatten(Map)
@@ -313,6 +367,14 @@ func TestFlatMap(t *testing.T) {
 }
 
 func TestGroupByKey(t *testing.T) {
+
+	t.Run("test invariants", func(t *testing.T) {
+		sc := NewUnaryScenario(IntFactory{}, func(input pipefn.Pipe[int]) pipefn.Pipe[[]int] {
+			return pipefn.GroupByKey(input, func(t int) int { return t / 10 })
+		})
+		sc.Run(t)
+	})
+
 	t.Run("group correctly", func(t *testing.T) {
 		// Define a simple pipe of letters
 		input := pipefn.FromSeq(seqOf("A", "A", "B", "B", "A", "C", "C", "C"))
@@ -336,42 +398,6 @@ func TestGroupByKey(t *testing.T) {
 		require.Equal(t, expected, vals)
 	})
 
-	t.Run("empty input", func(t *testing.T) {
-		input := pipefn.Pipe[string]{}
-		grouped := pipefn.GroupByKey(input, func(t string) string { return t })
-		requireEmpty(t, grouped)
-	})
-
-	t.Run("forwards error", func(t *testing.T) {
-		// Input values with a TryMap stage to inject errors
-		input := pipefn.FromSeq(seqOf(1, 1, 2, 2, 3))
-		inputWithErr := pipefn.TryMap(input, func(v int) (int, error) {
-			if v == 2 {
-				return 0, fmt.Errorf("bad value %d", v)
-			}
-			return v, nil
-		})
-
-		// Group by value
-		grouped := pipefn.GroupByKey(inputWithErr, func(v int) int { return v })
-
-		vals, errs, err := collect(grouped)
-		require.NoError(t, err)
-
-		// The values emitted should skip the elements that caused errors (2)
-		expectedVals := [][]int{
-			{1, 1},
-			{3},
-		}
-		require.Equal(t, expectedVals, vals)
-
-		// Errors should include the one produced for value 2
-		require.Len(t, errs, 2)
-		for _, err := range errs {
-			require.Contains(t, err.Error(), "bad value 2")
-		}
-	})
-
 	t.Run("panics if keyFunc is nil", func(t *testing.T) {
 		require.Panics(t, func() {
 			pipefn.GroupByKey[int, int](pipefn.Pipe[int]{}, nil)
@@ -379,11 +405,34 @@ func TestGroupByKey(t *testing.T) {
 	})
 }
 
-func TestGroupByAggregate(t *testing.T) {
-	type Record struct {
-		Key   string
-		Value int
+type Record struct {
+	Key   string
+	Value int
+}
+type RecordFactory struct{}
+
+func (rf RecordFactory) Random(n int) []Record {
+	out := []Record{}
+	for i := range n {
+		out = append(out, Record{
+			Key:   strconv.Itoa(i),
+			Value: rand.Intn(1000),
+		})
 	}
+	return out
+}
+
+func TestGroupByAggregate(t *testing.T) {
+
+	t.Run("test invariants", func(t *testing.T) {
+		sc := NewUnaryScenario(RecordFactory{}, func(input pipefn.Pipe[Record]) pipefn.Pipe[int] {
+			return pipefn.GroupByKeyAggregate(input,
+				func(r Record) string { return r.Key },       // key function
+				func(first Record) int { return 0 },          // init accumulator
+				func(acc *int, r Record) { *acc += r.Value }) // update accumulator
+		})
+		sc.Run(t)
+	})
 
 	t.Run("sum per group", func(t *testing.T) {
 		input := pipefn.FromSeq(seqOf(
@@ -404,45 +453,6 @@ func TestGroupByAggregate(t *testing.T) {
 
 		require.Empty(t, errs)
 		require.Equal(t, []int{3, 15, 3}, vals) // A1+A2=3, B1+B2=15, A3=3
-	})
-
-	t.Run("empty input", func(t *testing.T) {
-		input := pipefn.FromSeq(seqOf[Record]())
-		aggregated := pipefn.GroupByKeyAggregate(input,
-			func(r Record) string { return r.Key },
-			func(first Record) int { return 0 },
-			func(acc *int, r Record) { *acc += r.Value })
-
-		requireEmpty(t, aggregated)
-	})
-
-	t.Run("preserves errors", func(t *testing.T) {
-		input := pipefn.FromSeq(seqOf(
-			Record{"A", 1},
-			Record{"A", 2},
-			Record{"B", 10},
-		))
-		inputWithErr := pipefn.TryMap(input, func(r Record) (Record, error) {
-			if r.Value == 2 {
-				return Record{}, fmt.Errorf("bad value %d", r.Value)
-			}
-			return r, nil
-		})
-
-		aggregated := pipefn.GroupByKeyAggregate(inputWithErr,
-			func(r Record) string { return r.Key },
-			func(first Record) int { return 0 },
-			func(acc *int, r Record) { *acc += r.Value })
-
-		vals, errs, err := collect(aggregated)
-		require.NoError(t, err)
-
-		// The valid values are aggregated, ignoring the ones that produced errors
-		require.Equal(t, []int{1, 10}, vals)
-
-		// The error for Value=2 is preserved
-		require.Len(t, errs, 1)
-		require.EqualError(t, toPipelineError(errs[0]).Reason, "bad value 2")
 	})
 
 	t.Run("panics if keyFunc is nil", func(t *testing.T) {
@@ -708,6 +718,16 @@ func pipeWithError[T any](errCount int) pipefn.Pipe[T] {
 	return pipefn.TryMap(p, func(in int) (T, error) {
 		return stubValue, fmt.Errorf("err %d", in)
 	})
+}
+
+type IntFactory struct{}
+
+func (IntFactory) Random(n int) []int {
+	out := make([]int, n)
+	for i := range out {
+		out[i] = rand.Intn(math.MaxInt)
+	}
+	return out
 }
 
 type seqStream[T any] struct {
