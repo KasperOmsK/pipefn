@@ -191,6 +191,57 @@ func Flatten[T any](p Pipe[[]T]) Pipe[T] {
 	})
 }
 
+// Take returns a Pipe that produces at most n elements from p.
+//
+// Iteration stops after n values have been yielded, or when p is exhausted,
+// whichever comes first. If n is zero or negative, the returned Pipe produces no values.
+//
+// Because the returned Pipe stops consuming p after n elements, any transformation
+// errors that would occur beyond the first n elements are never produced.
+//
+// The returned Pipe preserves the terminal error of the input Pipe.
+func Take[T any](p Pipe[T], n int) Pipe[T] {
+	return makeChildPipe(p, func(input iter.Seq[T], errs chan<- error) iter.Seq[T] {
+		return func(yield func(T) bool) {
+			yielded := 0
+			for i := range input {
+				if yielded >= n || !yield(i) {
+					return
+				}
+				yielded++
+			}
+		}
+	})
+}
+
+// Drop returns a Pipe that skips the first n elements from the input Pipe p
+// and produces all subsequent elements.
+//
+// If n is zero or negative, the returned Pipe yields all elements from p.
+// If p contains fewer than n elements, the returned Pipe produces no values.
+//
+// All transformation errors from the input Pipe are propagated unchanged,
+// including those associated with skipped elements.
+//
+// The returned Pipe preserves the terminal error of the input Pipe.
+func Drop[T any](p Pipe[T], n int) Pipe[T] {
+	return makeChildPipe(p, func(input iter.Seq[T], errs chan<- error) iter.Seq[T] {
+		return func(yield func(T) bool) {
+			dropped := 0
+			for i := range input {
+				if dropped < n {
+					dropped++
+					continue
+				}
+
+				if !yield(i) {
+					return
+				}
+			}
+		}
+	})
+}
+
 // Chunk groups incoming values into slices of the given size and returns a Pipe producing those slices.
 //
 // The final chunk may be smaller than chunkSize.

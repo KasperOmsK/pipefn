@@ -46,6 +46,33 @@ func ExampleFromChan() {
 	// producer: stopping early
 }
 
+func ExampleTake() {
+	input := pipefn.FromSlice([]int{1, 2, 3, 4, 5})
+	take := pipefn.Take(input, 3)
+	values, _, _ := take.Collect()
+
+	for _, v := range values {
+		fmt.Println(v)
+	}
+	// Output:
+	// 1
+	// 2
+	// 3
+}
+
+func ExampleDrop() {
+	input := pipefn.FromSlice([]int{1, 2, 3, 4, 5})
+	take := pipefn.Drop(input, 3)
+	values, _, _ := take.Collect()
+
+	for _, v := range values {
+		fmt.Println(v)
+	}
+	// Output:
+	// 4
+	// 5
+}
+
 func ExampleMap() {
 	input := pipefn.FromSlice([]int{1, 2, 3})
 

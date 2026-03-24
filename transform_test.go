@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/KasperOmsK/pipefn"
-
 	"github.com/stretchr/testify/require"
 )
 
@@ -119,6 +118,68 @@ func TestFilter(t *testing.T) {
 		require.Panics(t, func() {
 			pipefn.Filter(pipefn.Pipe[int]{}, nil)
 		})
+	})
+}
+
+func TestTake(t *testing.T) {
+	t.Run("test invariants", func(t *testing.T) {
+		sc := NewUnaryScenario(IntFactory{}, func(input pipefn.Pipe[int]) pipefn.Pipe[int] {
+			return pipefn.Take(input, 5)
+		})
+		sc.Run(t)
+	})
+
+	t.Run("takes correctly", func(t *testing.T) {
+		p := pipefn.FromSlice([]int{1, 2, 3, 4, 5})
+
+		limited := pipefn.Take(p, 3)
+
+		values, errs, err := collect(limited)
+		require.Empty(t, errs)
+		require.Len(t, values, 3)
+		require.NoError(t, err)
+		require.Equal(t, []int{1, 2, 3}, values)
+	})
+
+	t.Run("takes n equal 0 is empty", func(t *testing.T) {
+		p := pipefn.FromSlice([]int{1, 2, 3, 4, 5})
+		limited := pipefn.Take(p, 0)
+		requireEmpty(t, limited)
+	})
+
+	t.Run("takes n less than 0 is empty", func(t *testing.T) {
+		p := pipefn.FromSlice([]int{1, 2, 3, 4, 5})
+		limited := pipefn.Take(p, -1)
+		requireEmpty(t, limited)
+	})
+
+	t.Run("p shorter stops before n", func(t *testing.T) {
+		p := pipefn.FromSlice([]int{1, 2})
+		limited := pipefn.Take(p, 3)
+		values, errs, err := collect(limited)
+		require.Empty(t, errs)
+		require.Len(t, values, 2)
+		require.NoError(t, err)
+		require.Equal(t, []int{1, 2}, values)
+	})
+}
+
+func TestDrop(t *testing.T) {
+	t.Run("test invariants", func(t *testing.T) {
+		sc := NewUnaryScenario(IntFactory{}, func(input pipefn.Pipe[int]) pipefn.Pipe[int] {
+			return pipefn.Drop(input, 5)
+		})
+		sc.Run(t)
+	})
+
+	t.Run("drops correctly", func(t *testing.T) {
+		p := pipefn.FromSlice([]int{1, 2, 3, 4, 5})
+		dropped := pipefn.Drop(p, 3)
+		values, errs, err := collect(dropped)
+		require.Empty(t, errs)
+		require.Len(t, values, 2)
+		require.NoError(t, err)
+		require.Equal(t, []int{4, 5}, values)
 	})
 }
 
