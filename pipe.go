@@ -280,6 +280,24 @@ func (p Pipe[T]) Collect() ([]T, []error, error) {
 	return outValues, outErrors, values.Err()
 }
 
+// CollectValues consumes the entire Pipe and returns all emitted values and
+// the terminal error of the value stream, if any.
+//
+// Values are collected in the order they are produced by the Pipe.
+// Pipeline errors are discarded.
+//
+// CollectValues fully drains the Pipe; after calling it, the Pipe cannot be consumed again.
+func (p *Pipe[T]) CollectValues() ([]T, error) {
+	var outValues []T
+
+	values := p.Values()
+	for v := range values.Seq() {
+		outValues = append(outValues, v)
+	}
+
+	return outValues, values.Err()
+}
+
 // Tap modifies p so that tapFn is called for each element that passes through p.
 // The tap function is called before the element is yielded.
 //
