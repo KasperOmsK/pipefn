@@ -92,23 +92,32 @@ func FromSlice[T any](elems []T) Pipe[T] {
 	})
 }
 
-// FromChan creates a Pipe that produces values received from ch.
+// FromChan returns a Pipe that produces values received from ch, along with
+// a done channel that is closed when the pipe stops consuming from ch.
 //
 // The resulting Pipe yields each value read from the channel until the
-// channel is closed. If the downstream consumer stops iteration early
-// (i.e., yield returns false), iteration stops immediately and remaining
-// values in the channel are ignored.
+// channel is closed. If the downstream consumer stops iteration early,
+// iteration stops immediately and remaining values in the channel are not consumed.
 //
-// FromChan does not close the provided channel; channel lifecycle remains
-// the responsibility of the caller.
-func FromChan[T any](ch <-chan T) Pipe[T] {
+// FromChan does not close the provided channel; instead, the done channel
+// is closed when consumption of ch terminates, either because the channel
+// is fully drained or because iteration stops early. Callers producing
+// values into ch should monitor done to know when to stop sending.
+//
+// The returned Pipe never terminates with an error: its value stream's Err()
+// method always returns nil.
+func FromChan[T any](ch <-chan T) (p Pipe[T], done <-chan struct{}) {
+
+	outCh := make(chan struct{})
+
 	return FromSeq(func(yield func(T) bool) {
+		defer close(outCh)
 		for c := range ch {
 			if !yield(c) {
 				return
 			}
 		}
-	})
+	}), outCh
 }
 
 // Results returns a Stream that yields the values produced by p,

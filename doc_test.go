@@ -49,7 +49,7 @@ func Example() {
 		ch <- "refund:1,2,3"
 		close(ch)
 	}()
-	inputsFromChan := pipefn.FromChan(ch)
+	inputsFromChan, _ := pipefn.FromChan(ch)
 
 	// ... or from the Stream interface
 	inputsFromStream := pipefn.From(stream)

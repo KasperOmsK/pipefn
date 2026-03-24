@@ -7,6 +7,41 @@ import (
 	"github.com/KasperOmsK/pipefn"
 )
 
+func ExampleFromChan() {
+	ch := make(chan int)
+
+	p, done := pipefn.FromChan(ch)
+
+	// Producer
+	go func() {
+		defer close(ch)
+		for i := 0; i < 10; i++ {
+			select {
+			case ch <- i:
+			case <-done:
+				fmt.Println("producer: stopping early")
+				return
+			}
+		}
+	}()
+
+	i := 0
+	// Consumer: only take first 3 values
+	for v := range p.Values().Seq() {
+		fmt.Println(v)
+		i++
+		if i >= 3 {
+			break
+		}
+	}
+
+	// Output:
+	// 0
+	// 1
+	// 2
+	// producer: stopping early
+}
+
 func ExampleMap() {
 	input := pipefn.FromSlice([]int{1, 2, 3})
 

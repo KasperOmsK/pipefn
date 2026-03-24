@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/KasperOmsK/pipefn"
 
@@ -65,20 +66,54 @@ func TestFromSlice_Empty(t *testing.T) {
 }
 
 func TestFromChan(t *testing.T) {
-	ch := make(chan int)
-	go func() {
-		for i := range 4 {
-			ch <- i
+
+	t.Run("drains channel", func(t *testing.T) {
+		ch := make(chan int)
+		go func() {
+			for i := range 4 {
+				ch <- i
+			}
+			close(ch)
+		}()
+		pipe, done := pipefn.FromChan(ch)
+
+		values, errs, err := collect(pipe)
+		require.Equal(t, []int{0, 1, 2, 3}, values)
+		require.Empty(t, errs)
+		require.NoError(t, err)
+		requireCompletesIn(t, func() {
+			// FromChan should have closed done
+			<-done
+		}, time.Second)
+	})
+
+	t.Run("closes done early on break", func(t *testing.T) {
+		ch := make(chan int)
+		pipe, done := pipefn.FromChan(ch)
+		go func() {
+			defer close(ch)
+			for i := range 4 {
+				select {
+				case ch <- i:
+				case <-done:
+					return
+				}
+			}
+		}()
+		values := pipe.Values()
+
+		// break early
+		for range values.Seq() {
+			break
 		}
-		close(ch)
-	}()
 
-	pipe := pipefn.FromChan(ch)
+		require.NoError(t, values.Err())
+		requireCompletesIn(t, func() {
+			// FromChan should have closed done after our break
+			<-done
+		}, time.Second)
+	})
 
-	values, errs, err := collect(pipe)
-	require.Equal(t, []int{0, 1, 2, 3}, values)
-	require.Empty(t, errs)
-	require.NoError(t, err)
 }
 
 func TestPipe_ZeroValuePipeUsable(t *testing.T) {
