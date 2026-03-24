@@ -23,6 +23,7 @@ func ExampleFromChan() {
 				return
 			}
 		}
+
 	}()
 
 	i := 0
@@ -34,6 +35,9 @@ func ExampleFromChan() {
 			break
 		}
 	}
+	// wait for producer to stop to ensure that the output
+	// is consistent
+	<-ch
 
 	// Output:
 	// 0
