@@ -14,20 +14,47 @@ var (
 type (
 	// Pipe represents a lazily-evaluated sequence of values of type T.
 	//
-	// Each transformation (Map, TryMap, Flatten etc.) produces a new Pipe that wraps the previous one.
+	// A Pipe is created using one of the From* functions (e.g. From, FromSlice etc.)
+	// and transformed into new Pipes using transformation functions such as
+	// Map, TryMap, Filter, GroupBy etc. Each transformation produces a new Pipe
+	// that wraps the previous one, forming a pipeline.
 	//
-	// Errors produced by fallible stages (for example TryMap) are sent on the
-	// pipeline's error channel. These errors describe failures associated with
-	// individual items flowing through the pipeline.
+	// Evaluation is lazy: values flow through the pipeline only when iterating over
+	// the output.
 	//
-	// A pipe may also terminate with a final failure. This terminal failure
-	// is reported by the value stream's Err() method once iteration completes.
+	// A Pipe is consumed by calling a consumption function such as:
+	//   - Results
+	//   - Values
+	//   - ForEach
+	//   - Collect
+	//   - CollectValues
 	//
-	// A Pipe is consumed when its Stream[T] is iterated, typically through Results,
-	// Values, ForEach, Collect etc. Once consumed, a Pipe cannot be reused.
-	// Refer to each consuming method's documentation for details on their behavior.
+	// Consumption is global and occurs at most once. After the first call to any of the
+	// above function, the entire pipeline is considered consumed, even if iteration as
+	// not begun. Any subsequent attempt to call any consumption function on any Pipe derived
+	// from that pipeline returns an empty stream whose Err() method returns ErrAlreadyConsumed.
 	//
-	// The zero Pipe is an empty pipe that yields no value and no error.
+	// Errors are handled at two levels:
+	//   - Per-item errors produced by fallible stages (e.g. TryMap) are sent on the
+	//     pipeline's error channel and are associated with individual items.
+	//
+	//     Such errors *must* be handled upon final iteration, either by manually draining
+	//     the error channel (see Results) or by explicitely discarding them (see Values).
+	//
+	//   - A pipeline may also terminate with a terminal error, which is reported by
+	//     the value stream's Err() method once consumption completes.
+	//
+	//     Terminal errors represent failures of the underlying data source or execution
+	//     environment (e.g. I/O errors, network failures, database interruptions), rather
+	//     than issues tied to specific items flowing through the pipeline.
+	//
+	//     This package does not define or interpret such errors. Instead, it leaves
+	//     the responsability to define these errors to the user through the Stream interface.
+	//     In particular, when a Pipe is created via From, its terminal error is exactly the one
+	//     returned by the provided Stream.
+	//     See Stream and From for details on how terminal errors are produced and observed.
+	//
+	// The zero Pipe is an empty pipe that yields no values and no errors.
 	Pipe[T any] struct {
 		*header
 		values Stream[T]
@@ -66,6 +93,9 @@ func From[T any](s Stream[T]) Pipe[T] {
 
 // FromSeq creates a Pipe that produces values from the provided iter.Seq.
 //
+// The returned Pipe never terminates with an error: its value stream's Err()
+// method always returns nil.
+//
 // FromSeq panics if seq is nil.
 func FromSeq[T any](seq iter.Seq[T]) Pipe[T] {
 	if seq == nil {
@@ -82,6 +112,9 @@ func FromSeq[T any](seq iter.Seq[T]) Pipe[T] {
 // The slice is not copied; iteration reads directly from elems.
 //
 // If elems is nil, the resulting Pipe behaves as an empty pipe.
+//
+// The returned Pipe never terminates with an error: its value stream's Err()
+// method always returns nil.
 func FromSlice[T any](elems []T) Pipe[T] {
 	return FromSeq(func(yield func(T) bool) {
 		for _, e := range elems {
@@ -123,12 +156,8 @@ func FromChan[T any](ch <-chan T) (p Pipe[T], done <-chan struct{}) {
 // Results returns a Stream that yields the values produced by p,
 // along with a channel that emits errors produced by the pipeline.
 //
-// A Pipe can be consumed only once. After the first successful call to Results,
-// any subsequent call returns an empty Stream whose Err() returns ErrAlreadyConsumed,
-// along with a closed error channel.
-//
 // The errors channel contains only transformation errors produced by
-// pipeline stages (for example via TryMap). Terminal failures of the
+// pipeline stages (for example via TryMap). Terminal error of the
 // underlying Stream are not sent through this channel and must instead
 // be checked via values.Err() after iteration completes.
 //
@@ -139,6 +168,8 @@ func FromChan[T any](ch <-chan T) (p Pipe[T], done <-chan struct{}) {
 // may use p.Values() instead.
 //
 // All errors emitted by the errors channel will be of type *PipeError.
+//
+// Results is a consumption method. See Pipe documentation for consumption semantics.
 //
 // Typical usage:
 //
@@ -160,11 +191,11 @@ func FromChan[T any](ch <-chan T) (p Pipe[T], done <-chan struct{}) {
 //	}
 //
 //	if err := values.Err() != nil {
-//	    // handle terminal failure (e.g. rollback or discard processed work)
+//	    // handle terminal error (e.g. rollback or discard processed work)
 //	}
 //
 //	<-done
-func (p Pipe[T]) Results() (values Stream[T], errs <-chan error) {
+func (p *Pipe[T]) Results() (values Stream[T], errs <-chan error) {
 	if p.header == nil {
 		empty := emptyPipe[T]()
 		return empty.Results()
@@ -201,8 +232,7 @@ func (p Pipe[T]) Results() (values Stream[T], errs <-chan error) {
 // internally and discarded. This allows callers who do not care about errors
 // to ignore them while still ensuring the pipe completes correctly.
 //
-// Iterating over the returned values sequence consumes p. Once iteration
-// begins, p cannot be reused or iterated again.
+// Values is a consumption method. See Pipe documentation for consumption semantics.
 //
 // Typical usage:
 //
@@ -212,9 +242,9 @@ func (p Pipe[T]) Results() (values Stream[T], errs <-chan error) {
 //	}
 //
 //	if err := stream.Err(); err != nil{
-//		// handle err (most likely rollback or discard the work done by process)
+//		// handle err
 //	}
-func (p Pipe[T]) Values() Stream[T] {
+func (p *Pipe[T]) Values() Stream[T] {
 	out, errs := p.Results()
 	go func() {
 		for range errs {
@@ -231,9 +261,13 @@ func (p Pipe[T]) Values() Stream[T] {
 // the caller is responsible for ensuring proper synchronization.
 //
 // ForEach blocks until the pipe has been fully consumed and all pipeline
-// errors have been delivered to errorFn. It then returns the terminal failure
+// errors have been delivered to errorFn. It then returns the terminal error
 // reported by the value stream, if any.
-func (p Pipe[T]) ForEach(consumeFn func(item T), errorFn func(err error)) error {
+//
+// Like for Results, calling ForEach is a destructive operation: any subsequent call
+// to ForEach (or Results, ForEach, Collect etc.) will return an empty stream whose
+// Err() method returns ErrAlreadyConsumed.
+func (p *Pipe[T]) ForEach(consumeFn func(item T), errorFn func(err error)) error {
 	values, errors := p.Results()
 	done := make(chan struct{})
 	go func() {
@@ -250,13 +284,13 @@ func (p Pipe[T]) ForEach(consumeFn func(item T), errorFn func(err error)) error 
 }
 
 // Collect consumes the entire Pipe and returns all emitted values,
-// all pipeline errors, and the terminal failure of the value stream.
+// all pipeline errors, and the terminal error of the value stream, if any.
 //
 // Values are collected in the order they are produced by the Pipe.
 // Errors are collected in the order they are emitted.
 //
 // Collect fully drains the Pipe; after calling it, the Pipe cannot be consumed again.
-func (p Pipe[T]) Collect() ([]T, []error, error) {
+func (p *Pipe[T]) Collect() ([]T, []error, error) {
 	var (
 		outValues []T
 		outErrors []error

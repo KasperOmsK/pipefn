@@ -54,7 +54,7 @@ func makeChildPipe[In, Out any](
 
 // Map returns a Pipe that applies fn to each value produced by p.
 //
-// Transformation errors and terminal failures from the input pipe are propagated unchanged.
+// Transformation errors and terminal errors from the input pipe are propagated unchanged.
 //
 // Map panics if fn is nil.
 func Map[In, Out any](p Pipe[In], fn MapFunc[In, Out]) Pipe[Out] {
@@ -79,7 +79,7 @@ func Map[In, Out any](p Pipe[In], fn MapFunc[In, Out]) Pipe[Out] {
 //
 // FlatMap is equivalent to calling Flatten(Map(p, fn)).
 //
-// Transformation errors and terminal failures from the input pipe are propagated unchanged.
+// Transformation errors and terminal errors from the input pipe are propagated unchanged.
 //
 // FlatMap panics if fn is nil.
 func FlatMap[In, Out any](p Pipe[In], fn MapFunc[In, []Out]) Pipe[Out] {
@@ -98,7 +98,7 @@ func FlatMap[In, Out any](p Pipe[In], fn MapFunc[In, []Out]) Pipe[Out] {
 // sent to the Pipe's error channel, and the corresponding value is skipped.
 //
 // Transformation errors produced by TryMap are added to the input pipe's
-// error channel. Any terminal failure from the input pipe is propagated unchanged.
+// error channel. Any terminal error from the input pipe is propagated unchanged.
 //
 // TryMap panics if fn is nil.
 func TryMap[In, Out any](p Pipe[In], fn TryMapFunc[In, Out]) Pipe[Out] {
@@ -136,7 +136,7 @@ func TryMap[In, Out any](p Pipe[In], fn TryMapFunc[In, Out]) Pipe[Out] {
 // are emitted individually by the returned Pipe.
 //
 // Transformation errors produced by FlatTryMap are added to the input pipe's
-// error channel. Any terminal failure from the input pipe is propagated unchanged.
+// error channel. Any terminal error from the input pipe is propagated unchanged.
 //
 // FlatTryMap is equivalent to calling Flatten(TryMap(p, fn)).
 //
@@ -151,7 +151,7 @@ func FlatTryMap[In, Out any](p Pipe[In], fn TryMapFunc[In, []Out]) Pipe[Out] {
 // Filter returns a Pipe that yields only the values for which predicate
 // returns true.
 //
-// Transformation errors and terminal failures from the input pipe are propagated unchanged.
+// Transformation errors and terminal errors from the input pipe are propagated unchanged.
 //
 // Filter panics if predicate is nil.
 func Filter[T any](p Pipe[T], predicate Predicate[T]) Pipe[T] {
@@ -176,7 +176,7 @@ func Filter[T any](p Pipe[T], predicate Predicate[T]) Pipe[T] {
 // Flatten converts a Pipe of slices into a Pipe of their elements,
 // emitting the items of each slice in order.
 //
-// Transformation errors and terminal failures from the input pipe are propagated unchanged.
+// Transformation errors and terminal errors from the input pipe are propagated unchanged.
 func Flatten[T any](p Pipe[[]T]) Pipe[T] {
 	return makeChildPipe(p, func(input iter.Seq[[]T], errs chan<- error) iter.Seq[T] {
 		return func(yield func(T) bool) {
@@ -195,7 +195,7 @@ func Flatten[T any](p Pipe[[]T]) Pipe[T] {
 //
 // The final chunk may be smaller than chunkSize.
 //
-// Transformation errors and terminal failures from the input pipe are propagated unchanged.
+// Transformation errors and terminal errors from the input pipe are propagated unchanged.
 //
 // Chunk panics if chunkSize is not positive.
 func Chunk[T any](p Pipe[T], chunkSize int) Pipe[[]T] {
@@ -273,7 +273,7 @@ func Chunk[T any](p Pipe[T], chunkSize int) Pipe[[]T] {
 //
 //	[A, A], [B, B], [A]
 //
-// Transformation errors and terminal failures from the input pipe are propagated unchanged.
+// Transformation errors and terminal errors from the input pipe are propagated unchanged.
 //
 // GroupByKey panics if keyFunc is nil.
 func GroupByKey[T any, K comparable](p Pipe[T], keyFunc func(T) K) Pipe[[]T] {
@@ -342,7 +342,7 @@ func GroupByKey[T any, K comparable](p Pipe[T], keyFunc func(T) K) Pipe[[]T] {
 //
 //	[A1, A2], [B1, B2], [A3]
 //
-// Transformation errors and terminal failures from the input pipe are propagated unchanged.
+// Transformation errors and terminal errors from the input pipe are propagated unchanged.
 //
 // GroupByKeyAggregate panics if either keyFunc, initFunc or updateFunc is nil.
 func GroupByKeyAggregate[In any, K comparable, Out any](
@@ -406,7 +406,7 @@ func GroupByKeyAggregate[In any, K comparable, Out any](
 //
 // If pipes is empty, Concat returns an empty pipe.
 //
-// Terminal failures are reported through the concatenated value stream.
+// terminal errors are reported through the concatenated value stream.
 // After the stream has been fully consumed, Stream.Err() returns the first
 // terminal error encountered among the input streams, if any. If a pipe
 // terminates with a failure, subsequent pipes are not processed.
@@ -482,7 +482,7 @@ func Concat[T any](pipes ...Pipe[T]) Pipe[T] {
 //
 // If pipes is empty, Merge returns an empty pipe.
 //
-// Terminal failures are reported through the merged value stream. After the
+// Terminal errors are reported through the merged value stream. After the
 // stream has been fully consumed, Stream.Err() returns the first terminal
 // error encountered among the merged pipes, if any.
 func Merge[T any](pipes ...Pipe[T]) Pipe[T] {
