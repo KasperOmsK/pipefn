@@ -209,18 +209,26 @@ func TestChunk(t *testing.T) {
 		require.Empty(t, errs)
 	})
 
-	t.Run("panics if invalid chunk size", func(t *testing.T) {
-		src := pipefn.FromSeq(seqOf(1, 2, 3))
+	t.Run("single chunk on 0 chunk size", func(t *testing.T) {
+		src := pipefn.FromSlice([]int{1, 2, 3, 4, 5})
+		p := pipefn.Chunk(src, 0)
+		vals, errs, err := collect(p)
+		require.NoError(t, err)
 
-		require.Panics(t, func() {
-			pipefn.Chunk(src, -1)
-		})
-
-		require.Panics(t, func() {
-			pipefn.Chunk(src, 0)
-		})
-
+		require.Len(t, vals, 1, "multiple chunk where one is expected")
+		require.Empty(t, errs)
 	})
+
+	t.Run("single chunk on negative chunk size", func(t *testing.T) {
+		src := pipefn.FromSlice([]int{1, 2, 3, 4, 5})
+		p := pipefn.Chunk(src, -1)
+		vals, errs, err := collect(p)
+		require.NoError(t, err)
+
+		require.Len(t, vals, 1, "multiple chunk where one is expected")
+		require.Empty(t, errs)
+	})
+
 }
 
 func TestMerge(t *testing.T) {

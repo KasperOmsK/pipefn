@@ -246,13 +246,10 @@ func Drop[T any](p Pipe[T], n int) Pipe[T] {
 //
 // The final chunk may be smaller than chunkSize.
 //
-// Transformation errors and terminal errors from the input pipe are propagated unchanged.
+// If chunkSize is zero or negative, all input values are emitted as a single chunk.
 //
-// Chunk panics if chunkSize is not positive.
+// Transformation errors and terminal errors from the input pipe are propagated unchanged.
 func Chunk[T any](p Pipe[T], chunkSize int) Pipe[[]T] {
-	if chunkSize <= 0 {
-		panic("pipefn.Chunk: chunkSize is not positive")
-	}
 
 	return makeChildPipe(p, func(input iter.Seq[T], errs chan<- error) iter.Seq[[]T] {
 		return func(yield func([]T) bool) {
@@ -287,21 +284,33 @@ func Chunk[T any](p Pipe[T], chunkSize int) Pipe[[]T] {
 			// are retained, but if that does happen, it could lead to unexpectedly high
 			// memory retention.
 
-			accum := make([]T, 0, chunkSize)
-			for i := range input {
-				if len(accum) >= chunkSize {
-					if !yield(accum) {
-						return
+			var accum []T
+			if chunkSize <= 0 {
+				// chunkSize <= 0 => Collect into one single chunk
+				accum = make([]T, 0, 512)
+				for i := range input {
+					accum = append(accum, i)
+				}
+				yield(accum)
+			} else {
+				// otherwise chunk into chunkSize groups
+				accum = make([]T, 0, chunkSize)
+				for i := range input {
+					if len(accum) >= chunkSize {
+						if !yield(accum) {
+							return
+						}
+						accum = make([]T, 0, chunkSize)
 					}
-					accum = make([]T, 0, chunkSize)
+
+					accum = append(accum, i)
 				}
 
-				accum = append(accum, i)
+				if len(accum) > 0 {
+					yield(accum)
+				}
 			}
 
-			if len(accum) > 0 {
-				yield(accum)
-			}
 		}
 	})
 }
