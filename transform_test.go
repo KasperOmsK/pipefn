@@ -616,6 +616,50 @@ func TestConcat(t *testing.T) {
 		require.NoError(t, failure)
 	})
 
+	t.Run("with slow error consumer", func(t *testing.T) {
+		mapErr := errors.New("map failure")
+
+		// The errors are consumed slowly: when the first pipe is exhausted,
+		// its second error has not been delivered yet. Every error must still
+		// be delivered once the values are exhausted.
+		p1 := pipefn.TryMap(
+			pipefn.FromSlice([]int{1, 2, 3}),
+			func(v int) (int, error) {
+				if v < 3 {
+					return 0, mapErr
+				}
+				return v, nil
+			},
+		)
+		p2 := pipefn.FromSlice([]int{4, 5})
+
+		concat := pipefn.Concat(p1, p2)
+		values, errs := concat.Results()
+
+		var gotErrs []error
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for e := range errs {
+				time.Sleep(50 * time.Millisecond)
+				gotErrs = append(gotErrs, e)
+			}
+		}()
+
+		var gotValues []int
+		for v := range values.Seq() {
+			gotValues = append(gotValues, v)
+		}
+		<-done
+
+		require.NoError(t, values.Err())
+		require.Equal(t, []int{3, 4, 5}, gotValues)
+		require.Len(t, gotErrs, 2)
+		for _, e := range gotErrs {
+			require.ErrorIs(t, e, mapErr)
+		}
+	})
+
 	t.Run("with terminal failure", func(t *testing.T) {
 		terminalErr := errors.New("terminal failure")
 
