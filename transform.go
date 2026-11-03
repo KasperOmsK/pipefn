@@ -524,6 +524,11 @@ func Concat[T any](pipes ...Pipe[T]) Pipe[T] {
 						}
 					}
 
+					// wait until every error of the current pipe has been forwarded
+					// before moving on, so that errors stay ordered and concatErrs is
+					// never written to after it has been closed.
+					<-currentPipeErrDone
+
 					if failure := stream.Err(); failure != nil {
 						firstFailure <- failure
 						return
