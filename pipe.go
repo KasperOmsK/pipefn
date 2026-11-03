@@ -30,7 +30,7 @@ type (
 	//   - CollectValues
 	//
 	// Consumption is global and occurs at most once. After the first call to any of the
-	// above function, the entire pipeline is considered consumed, even if iteration as
+	// above function, the entire pipeline is considered consumed, even if iteration has
 	// not begun. Any subsequent attempt to call any consumption function on any Pipe derived
 	// from that pipeline returns an empty stream whose Err() method returns ErrAlreadyConsumed.
 	//
@@ -39,7 +39,7 @@ type (
 	//     pipeline's error channel and are associated with individual items.
 	//
 	//     Such errors *must* be handled upon final iteration, either by manually draining
-	//     the error channel (see Results) or by explicitely discarding them (see Values).
+	//     the error channel (see Results) or by explicitly discarding them (see Values).
 	//
 	//   - A pipeline may also terminate with a terminal error, which is reported by
 	//     the value stream's Err() method once consumption completes.
@@ -49,7 +49,7 @@ type (
 	//     than issues tied to specific items flowing through the pipeline.
 	//
 	//     This package does not define or interpret such errors. Instead, it leaves
-	//     the responsability to define these errors to the user through the Stream interface.
+	//     the responsibility to define these errors to the user through the Stream interface.
 	//     In particular, when a Pipe is created via From, its terminal error is exactly the one
 	//     returned by the provided Stream.
 	//     See Stream and From for details on how terminal errors are produced and observed.
@@ -60,7 +60,7 @@ type (
 		values Stream[T]
 	}
 
-	// PipeError represents an error that occured inside a pipeline
+	// PipeError represents an error that occurred inside a pipeline
 	PipeError struct {
 		// The item that generated the error
 		Item any
@@ -196,6 +196,14 @@ func FromChan[T any](ch <-chan T) (p Pipe[T], done <-chan struct{}) {
 //
 //	<-done
 func (p *Pipe[T]) Results() (values Stream[T], errs <-chan error) {
+	// FIXME: the values stream is single-use, but it does not follow the iter
+	// package convention for single-use iterators, where calling the iterator
+	// again after the sequence is finished yields no values. Iterating it a
+	// second time panics instead, as p.errors is closed twice.
+	//
+	// FIXME: for some pipes (e.g. those built by Concat or Zip), calling Err()
+	// on a stream that was never iterated blocks forever.
+
 	if p.header == nil {
 		empty := emptyPipe[T]()
 		return empty.Results()
@@ -337,17 +345,27 @@ func (p *Pipe[T]) CollectValues() ([]T, error) {
 //
 // Calling Tap multiple times will chain tap functions in the order they were added.
 //
+// Tap only affects p itself and Pipes derived from p after the call to Tap;
+// Pipes derived from p before the call are left unchanged.
+//
+// The terminal error of p is preserved.
+//
 // Tap panics if tapFn is nil.
 func (p *Pipe[T]) Tap(tapFn func(T)) {
-
-	p.mu.Lock()
-	defer p.mu.Unlock()
 
 	if tapFn == nil {
 		panic("Pipe.Tap: tapFn cannot be nil")
 	}
 
-	originalIt := p.values.Seq()
+	if p.header == nil {
+		*p = emptyPipe[T]()
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	original := p.values
+	originalIt := original.Seq()
 	p.values = seqStream[T]{
 		seq: func(yield func(T) bool) {
 			for i := range originalIt {
@@ -357,6 +375,7 @@ func (p *Pipe[T]) Tap(tapFn func(T)) {
 				}
 			}
 		},
+		errFunc: original.Err,
 	}
 }
 

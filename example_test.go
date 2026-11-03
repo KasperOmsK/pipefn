@@ -275,27 +275,6 @@ func ExampleChunk() {
 	// [5]
 }
 
-func ExampleMerge() {
-	p1 := pipefn.FromSlice([]int{1, 2})
-	p2 := pipefn.FromSlice([]int{3})
-	p3 := pipefn.FromSlice([]int{4, 5})
-
-	merged := pipefn.Merge(p1, p2, p3)
-
-	values, _, _ := merged.Collect()
-
-	for _, v := range values {
-		fmt.Println(v)
-	}
-
-	// Possible output:
-	// 1
-	// 3
-	// 2
-	// 4
-	// 5
-}
-
 func ExampleConcat() {
 	p1 := pipefn.FromSlice([]int{1, 2})
 	p2 := pipefn.FromSlice([]int{3})

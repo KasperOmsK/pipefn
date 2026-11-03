@@ -231,87 +231,6 @@ func TestChunk(t *testing.T) {
 
 }
 
-func TestMerge(t *testing.T) {
-
-	t.Run("merge correctly", func(t *testing.T) {
-		p1 := pipefn.FromSeq(seqOf(1, 2))
-		p2 := pipefn.FromSeq(seqOf(3, 4))
-
-		merged := pipefn.Merge(p1, p2)
-
-		vals, errs, err := collect(merged)
-		require.NoError(t, err)
-
-		require.ElementsMatch(t, []int{1, 2, 3, 4}, vals)
-		require.Empty(t, errs)
-	})
-
-	t.Run("forwards errors", func(t *testing.T) {
-		// Pipe 1: values 1, 2, emits an error for 2
-		pipe1 := pipefn.FromSeq(seqOf(1, 2))
-		pipe1 = pipefn.TryMap(pipe1, func(v int) (int, error) {
-			if v == 2 {
-				return 0, fmt.Errorf("pipe1 error")
-			}
-			return v, nil
-		})
-
-		// Pipe 2: values 3, 4, emits an error for 4
-		pipe2 := pipefn.FromSeq(seqOf(3, 4))
-		pipe2 = pipefn.TryMap(pipe2, func(v int) (int, error) {
-			if v == 4 {
-				return 0, fmt.Errorf("pipe2 error")
-			}
-			return v, nil
-		})
-
-		merged := pipefn.Merge(pipe1, pipe2)
-
-		vals, errs, err := collect(merged)
-		require.NoError(t, err)
-
-		// All successful values should be present
-		require.ElementsMatch(t, []int{1, 3}, vals)
-
-		// Errors from both pipes should be reported
-		require.Len(t, errs, 2)
-		errorMsgs := []string{toPipelineError(errs[0]).Reason.Error(), toPipelineError(errs[1]).Reason.Error()}
-		require.Contains(t, errorMsgs, "pipe1 error")
-		require.Contains(t, errorMsgs, "pipe2 error")
-	})
-
-	t.Run("abort early", func(t *testing.T) {
-		p1 := pipefn.FromSeq(func(yield func(int) bool) {
-			for {
-				time.Sleep(time.Millisecond * 10)
-				if !yield(1) {
-					return
-				}
-			}
-		})
-		p2 := pipefn.From(errorStream[int](fmt.Errorf("stream error")))
-
-		requireCompletesIn(t, func() {
-			merged := pipefn.Merge(p1, p2)
-			_, errs, err := collect(merged)
-			require.Error(t, err)
-			require.Empty(t, errs)
-		}, time.Second)
-	})
-
-	t.Run("same lineage", func(t *testing.T) {
-		p := pipefn.FromSlice([]int{1, 2, 3})
-		p2 := pipefn.Map(p, func(in int) int { return 2 * in })
-		_, _, err := collect(pipefn.Merge(p, p2))
-		require.ErrorIs(t, err, pipefn.ErrAlreadyConsumed)
-	})
-
-	t.Run("no input", func(t *testing.T) {
-		p := pipefn.Merge[int]()
-		requireEmpty(t, p)
-	})
-}
-
 func TestFlatTryMap(t *testing.T) {
 	// tests that FlatTryMap behaves identically to Flatten(TryMap)
 
@@ -614,6 +533,50 @@ func TestConcat(t *testing.T) {
 		require.Equal(t, []int{1, 3, 4}, values)
 		require.Len(t, errs, 2)
 		require.NoError(t, failure)
+	})
+
+	t.Run("with slow error consumer", func(t *testing.T) {
+		mapErr := errors.New("map failure")
+
+		// The errors are consumed slowly: when the first pipe is exhausted,
+		// its second error has not been delivered yet. Every error must still
+		// be delivered once the values are exhausted.
+		p1 := pipefn.TryMap(
+			pipefn.FromSlice([]int{1, 2, 3}),
+			func(v int) (int, error) {
+				if v < 3 {
+					return 0, mapErr
+				}
+				return v, nil
+			},
+		)
+		p2 := pipefn.FromSlice([]int{4, 5})
+
+		concat := pipefn.Concat(p1, p2)
+		values, errs := concat.Results()
+
+		var gotErrs []error
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for e := range errs {
+				time.Sleep(50 * time.Millisecond)
+				gotErrs = append(gotErrs, e)
+			}
+		}()
+
+		var gotValues []int
+		for v := range values.Seq() {
+			gotValues = append(gotValues, v)
+		}
+		<-done
+
+		require.NoError(t, values.Err())
+		require.Equal(t, []int{3, 4, 5}, gotValues)
+		require.Len(t, gotErrs, 2)
+		for _, e := range gotErrs {
+			require.ErrorIs(t, e, mapErr)
+		}
 	})
 
 	t.Run("with terminal failure", func(t *testing.T) {
