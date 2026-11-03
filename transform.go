@@ -1,7 +1,6 @@
 package pipefn
 
 import (
-	"context"
 	"fmt"
 	"iter"
 	"sync"
@@ -112,7 +111,7 @@ func TryMap[In, Out any](p Pipe[In], fn TryMapFunc[In, Out]) Pipe[Out] {
 			for in := range input {
 				result, err := fn(in)
 				if err != nil {
-					p.errors <- &PipeError{
+					errs <- &PipeError{
 						Item:   in,
 						Reason: err,
 					}
@@ -203,12 +202,19 @@ func Flatten[T any](p Pipe[[]T]) Pipe[T] {
 func Take[T any](p Pipe[T], n int) Pipe[T] {
 	return makeChildPipe(p, func(input iter.Seq[T], errs chan<- error) iter.Seq[T] {
 		return func(yield func(T) bool) {
+			if n <= 0 {
+				return
+			}
 			yielded := 0
 			for i := range input {
-				if yielded >= n || !yield(i) {
+				if !yield(i) {
 					return
 				}
 				yielded++
+				// stop right after the n-th value so that input is never pulled further
+				if yielded >= n {
+					return
+				}
 			}
 		}
 	})
@@ -291,7 +297,9 @@ func Chunk[T any](p Pipe[T], chunkSize int) Pipe[[]T] {
 				for i := range input {
 					accum = append(accum, i)
 				}
-				yield(accum)
+				if len(accum) > 0 {
+					yield(accum)
+				}
 			} else {
 				// otherwise chunk into chunkSize groups
 				accum = make([]T, 0, chunkSize)
@@ -339,7 +347,7 @@ func Chunk[T any](p Pipe[T], chunkSize int) Pipe[[]T] {
 func GroupByKey[T any, K comparable](p Pipe[T], keyFunc func(T) K) Pipe[[]T] {
 
 	if keyFunc == nil {
-		panic("pipefn.GroupBy: keyFunc is nil")
+		panic("pipefn.GroupByKey: keyFunc is nil")
 	}
 
 	return makeChildPipe(p, func(input iter.Seq[T], errs chan<- error) iter.Seq[[]T] {
@@ -375,11 +383,11 @@ func GroupByKey[T any, K comparable](p Pipe[T], keyFunc func(T) K) Pipe[[]T] {
 // for pipelines where groups may be large.
 //
 // initFunc is called when a new group starts. It receives the first value of the
-// group and should returns the initial accumulator for that group.
+// group and should return the initial accumulator for that group.
 //
 // updateFunc is called for each value in the current group, including the first one.
 // It receives a pointer to the accumulator and the current input value, and should
-// updates the accumulator in place.
+// update the accumulator in place.
 //
 // For example, to sum values in each group:
 //
@@ -391,7 +399,7 @@ func GroupByKey[T any, K comparable](p Pipe[T], keyFunc func(T) K) Pipe[[]T] {
 //	    *acc += v // add the value to the accumulator
 //	}
 //
-// Like GroupBy, GroupByKeyAggregate does not reorder input values. The input Pipe
+// Like GroupByKey, GroupByKeyAggregate does not reorder input values. The input Pipe
 // must already be ordered by key if consistent aggregation per key is desired.
 //
 // For example, with input values:
@@ -413,11 +421,11 @@ func GroupByKeyAggregate[In any, K comparable, Out any](
 
 	switch {
 	case keyFunc == nil:
-		panic("pipefn.GroupByAggregate: keyFunc is nil")
+		panic("pipefn.GroupByKeyAggregate: keyFunc is nil")
 	case initFunc == nil:
-		panic("pipefn.GroupByAggregate: initFunc is nil")
+		panic("pipefn.GroupByKeyAggregate: initFunc is nil")
 	case updateFunc == nil:
-		panic("pipefn.GroupByAggregate: updateFunc is nil")
+		panic("pipefn.GroupByKeyAggregate: updateFunc is nil")
 	}
 
 	return makeChildPipe(p, func(input iter.Seq[In], errs chan<- error) iter.Seq[Out] {
@@ -539,93 +547,6 @@ func Concat[T any](pipes ...Pipe[T]) Pipe[T] {
 	}
 }
 
-// Merge combines multiple pipes into a single Pipe that emits all values
-// and pipeline errors produced by the input pipes.
-//
-// Values and errors originating from different pipes may be interleaved
-// and are not guaranteed to preserve the relative ordering between pipes.
-//
-// If pipes is empty, Merge returns an empty pipe.
-//
-// Terminal errors are reported through the merged value stream. After the
-// stream has been fully consumed, Stream.Err() returns the first terminal
-// error encountered among the merged pipes, if any.
-func Merge[T any](pipes ...Pipe[T]) Pipe[T] {
-
-	switch len(pipes) {
-	case 0:
-		return Pipe[T]{}
-	case 1:
-		return pipes[0]
-	}
-
-	// NOTE: The api technically allows the caller to merge pipes of the same lineage... e.g.
-	//
-	//	root := somePipe()
-	//	p1 := pipefn.Map(root, someMapFunc)
-	//	merged := pipefn.Merge(p1, root) <== This is nonsense and will have undefined behaviour
-	//
-	// To catch these programmer errors, we check if any pipe shares the same header (and thus the same lineage)
-	// and if so, panic.
-	// FIXME: checking lineage this way is dumb and wont behave nicely with Merge since Merge
-	// creates a "split" in the lineage => A merged Pipe is a new root so its *header is always a new one
-	//
-	//	p1 := somePipe()
-	//	p2 := someOtherPipe()
-	//	merged := pipefn.Merge(p1, p2)
-	//	mergedBis := pipefn.Merge(merged, p1, p2) <== The suggested implementation wont catch this.
-
-	mergedErrors := make(chan error, len(pipes))
-	firstErr := make(chan error, 1)
-	firstErrFunc := sync.OnceValue(func() error {
-		return <-firstErr
-	})
-
-	return Pipe[T]{
-		header: &header{
-			errors: mergedErrors,
-		},
-		values: seqStream[T]{
-			seq: func(yield func(T) bool) {
-
-				defer close(firstErr)
-
-				allStreams := make([]Stream[T], 0, len(pipes))
-				allErrors := make([]<-chan error, 0, len(pipes))
-				for _, p := range pipes {
-					values, errs := p.Results()
-					allStreams = append(allStreams, values)
-					allErrors = append(allErrors, errs)
-				}
-
-				groupCtx, cancelGroup := context.WithCancel(context.Background())
-				group := fanInStreams(groupCtx, allStreams...)
-				go func() {
-					firstErr <- group.Wait()
-				}()
-
-				errDone := fanInChans(mergedErrors, allErrors...)
-
-				defer cancelGroup()
-				for v := range group.Out() {
-					if !yield(v) {
-						cancelGroup()
-						break
-					}
-				}
-
-				// wait for the signal that mergedErrors can be closed before stopping the Seq.
-				// we do it this way because the contract is:
-				//
-				//	all errors on pipe.header.errors *must* be sent before the Seq returns.
-				//
-				<-errDone
-			},
-			errFunc: firstErrFunc,
-		},
-	}
-}
-
 // Zip combines two pipes into a single Pipe that emits pairs of values,
 // where each pair consists of one value from the left pipe and one value
 // from the right pipe.
@@ -647,7 +568,7 @@ func Merge[T any](pipes ...Pipe[T]) Pipe[T] {
 // terminal error encountered from either input pipe, if any.
 func Zip[Left, Right any](left Pipe[Left], right Pipe[Right]) Pipe[Tuple[Left, Right]] {
 
-	// FIXME: same problem as Merge/Concat: shared lineage causes issues
+	// FIXME: same problem as Concat: shared lineage causes issues
 
 	mergedErrors := make(chan error, 2)
 	firstErr := make(chan error, 1)
@@ -717,25 +638,6 @@ func forwardErrors(src <-chan error, dst chan<- error) (done chan struct{}) {
 		close(done)
 	}()
 	return done
-}
-
-func fanInStreams[T any](ctx context.Context, streams ...Stream[T]) *fanInGroup[T] {
-	group := newFaninGroup[T](ctx)
-	for _, s := range streams {
-		group.Go(func(groupCtx context.Context, c chan<- T) error {
-		ForLoop:
-			for v := range s.Seq() {
-				select {
-				case <-groupCtx.Done():
-					break ForLoop
-				case c <- v:
-				}
-			}
-
-			return s.Err()
-		})
-	}
-	return group
 }
 
 // fanInChans combines all chans in a single dst chan.

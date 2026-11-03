@@ -54,10 +54,10 @@ func Example() {
 	// ... or from the Stream interface
 	inputsFromStream := pipefn.From(stream)
 
-	// Merge multiple pipes of the same type.
+	// Concat multiple pipes of the same type.
 	//
 	// if any input pipe fails, the merged pipe will also fail with the first encountered failure.
-	allInputs := pipefn.Merge(inputsFromSeq, inputsFromSlice, inputsFromStream, inputsFromChan)
+	allInputs := pipefn.Concat(inputsFromSeq, inputsFromSlice, inputsFromStream, inputsFromChan)
 
 	// Map applies deterministic transformations that cannot fail.
 	// Transformations are simple functions, making it easy to reuse existing code.
