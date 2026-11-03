@@ -196,6 +196,14 @@ func FromChan[T any](ch <-chan T) (p Pipe[T], done <-chan struct{}) {
 //
 //	<-done
 func (p *Pipe[T]) Results() (values Stream[T], errs <-chan error) {
+	// FIXME: the values stream is single-use, but it does not follow the iter
+	// package convention for single-use iterators, where calling the iterator
+	// again after the sequence is finished yields no values. Iterating it a
+	// second time panics instead, as p.errors is closed twice.
+	//
+	// FIXME: for some pipes (e.g. those built by Concat or Zip), calling Err()
+	// on a stream that was never iterated blocks forever.
+
 	if p.header == nil {
 		empty := emptyPipe[T]()
 		return empty.Results()
